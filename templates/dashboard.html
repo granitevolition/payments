@@ -1,58 +1,179 @@
-{% extends "base.html" %}
+{% extends 'base.html' %}
 
-{% block title %}Dashboard - Lipia Subscription Service{% endblock %}
+{% block title %}Dashboard{% endblock %}
+
+{% block styles %}
+<style>
+    .dashboard-card {
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        padding: 20px;
+        margin-bottom: 20px;
+        background-color: #fff;
+    }
+    
+    .stats-value {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #3498db;
+    }
+    
+    .stats-label {
+        color: #7f8c8d;
+        font-size: 1rem;
+    }
+    
+    .payment-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    
+    .payment-table th, .payment-table td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid #ddd;
+    }
+    
+    .payment-table th {
+        background-color: #f8f9fa;
+    }
+    
+    .payment-table tr:hover {
+        background-color: #f5f5f5;
+    }
+    
+    .status-badge {
+        padding: 5px 10px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    
+    .status-completed {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    
+    .status-pending {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+    
+    .status-failed {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .status-error {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .status-processing {
+        background-color: #b8daff;
+        color: #004085;
+    }
+    
+    .status-cancelled {
+        background-color: #e2e3e5;
+        color: #383d41;
+    }
+    
+    .status-queued {
+        background-color: #d1ecf1;
+        color: #0c5460;
+    }
+    
+    /* Payment notification styling */
+    #payment-notification {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background-color: #fff;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        padding: 20px;
+        max-width: 350px;
+        z-index: 1000;
+        display: none;
+    }
+    
+    #payment-notification .spinner {
+        display: inline-block;
+        width: 24px;
+        height: 24px;
+        border: 3px solid rgba(0,0,0,0.1);
+        border-radius: 50%;
+        border-top-color: #3498db;
+        animation: spin 1s ease-in-out infinite;
+        margin-right: 10px;
+        vertical-align: middle;
+    }
+    
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    
+    .action-buttons button {
+        margin-right: 5px;
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-12">
-        <div class="card shadow mb-4">
-            <div class="card-header bg-primary text-white">
-                <h4 class="card-title mb-0">User Dashboard</h4>
+<div class="container mt-4">
+    <div class="row">
+        <!-- Welcome Section -->
+        <div class="col-md-12">
+            <div class="dashboard-card">
+                <h2>Welcome, {{ current_user.username }}!</h2>
+                <p>This is your dashboard where you can manage your subscriptions and track word usage.</p>
             </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-6">
-                        <div class="card mb-3">
-                            <div class="card-header bg-light">
-                                <h5 class="card-title mb-0">User Information</h5>
-                            </div>
-                            <div class="card-body">
-                                <p><strong>Username:</strong> {{ current_user.username }}</p>
-                                <p><strong>Words Remaining:</strong> <span class="badge bg-success">{{ current_user.words_remaining }}</span></p>
-                                <p><strong>Phone Number:</strong> {{ current_user.phone_number }}</p>
-                                <p><strong>Last Login:</strong> {{ current_user.last_login.strftime('%Y-%m-%d %H:%M:%S') }}</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="card mb-3">
-                            <div class="card-header bg-light">
-                                <h5 class="card-title mb-0">Quick Actions</h5>
-                            </div>
-                            <div class="card-body">
-                                <div class="d-grid gap-2">
-                                    <a href="{{ url_for('subscription') }}" class="btn btn-primary">Purchase Subscription</a>
-                                    <a href="{{ url_for('use_words') }}" class="btn btn-secondary">Use Words</a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+        </div>
+        
+        <!-- Words Stats -->
+        <div class="col-md-6">
+            <div class="dashboard-card text-center">
+                <p class="stats-label">Available Words</p>
+                <p class="stats-value">{{ current_user.words_remaining }}</p>
+                <div class="mt-4">
+                    <a href="{{ url_for('subscription') }}" class="btn btn-primary">Get More Words</a>
                 </div>
             </div>
         </div>
         
-        {% if payments %}
-        <div class="card shadow">
-            <div class="card-header bg-primary text-white">
-                <h4 class="card-title mb-0">Payment History</h4>
+        <!-- Account Info -->
+        <div class="col-md-6">
+            <div class="dashboard-card">
+                <h4>Account Information</h4>
+                <table class="table table-borderless">
+                    <tr>
+                        <th>Username:</th>
+                        <td>{{ current_user.username }}</td>
+                    </tr>
+                    <tr>
+                        <th>Phone Number:</th>
+                        <td>{{ current_user.phone_number }}</td>
+                    </tr>
+                    <tr>
+                        <th>Last Login:</th>
+                        <td>{{ current_user.last_login.strftime('%Y-%m-%d %H:%M') }}</td>
+                    </tr>
+                </table>
             </div>
-            <div class="card-body">
+        </div>
+        
+        <!-- Payment History -->
+        <div class="col-md-12 mt-4">
+            <div class="dashboard-card">
+                <h4>Payment History</h4>
+                {% if payments %}
                 <div class="table-responsive">
-                    <table class="table table-hover">
+                    <table class="payment-table">
                         <thead>
                             <tr>
                                 <th>Date</th>
-                                <th>Subscription Type</th>
+                                <th>Subscription</th>
                                 <th>Amount</th>
                                 <th>Reference</th>
                                 <th>Status</th>
@@ -61,31 +182,73 @@
                         <tbody>
                             {% for payment in payments %}
                             <tr>
-                                <td>{{ payment.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                                <td>{{ payment.subscription_type }}</td>
+                                <td>{{ payment.timestamp.strftime('%Y-%m-%d %H:%M') if payment.timestamp is not string else payment.timestamp }}</td>
+                                <td>{{ payment.subscription_type|capitalize }}</td>
                                 <td>${{ payment.amount }}</td>
                                 <td>{{ payment.reference }}</td>
                                 <td>
-                                    {% if payment.status == 'completed' %}
-                                        <span class="badge bg-success">Completed</span>
-                                    {% elif payment.status == 'pending' %}
-                                        <span class="badge bg-warning">Pending</span>
-                                    {% else %}
-                                        <span class="badge bg-danger">{{ payment.status }}</span>
-                                    {% endif %}
+                                    <span class="status-badge status-{{ payment.status }}">
+                                        {{ payment.status|capitalize }}
+                                    </span>
                                 </td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
+                {% else %}
+                <p>No payment history available.</p>
+                {% endif %}
             </div>
         </div>
-        {% else %}
-        <div class="alert alert-info" role="alert">
-            You haven't made any payments yet. <a href="{{ url_for('subscription') }}" class="alert-link">Subscribe now</a> to get started!
-        </div>
-        {% endif %}
     </div>
 </div>
+
+<!-- Payment notification overlay -->
+<div id="payment-notification">
+    <div class="d-flex align-items-center mb-3">
+        <div class="spinner"></div>
+        <h5 class="mb-0" id="payment-status-title">Processing Payment</h5>
+    </div>
+    <p id="payment-status-message">Waiting for M-Pesa confirmation...</p>
+    <div class="action-buttons">
+        <button id="cancel-payment-btn" class="btn btn-sm btn-outline-danger">Cancel</button>
+        <button id="hide-notification-btn" class="btn btn-sm btn-outline-secondary">Hide</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/payment.js') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Check if there's an active payment in session
+        {% if session.get('active_payment_id') %}
+        // Show payment notification
+        showPaymentNotification();
+        
+        // Start polling for status
+        startPaymentStatusPolling(
+            '{{ session.get("active_payment_id") }}',
+            '{{ url_for("check_payment_status", checkout_id="") }}'
+        );
+        
+        // Set up cancel button
+        document.getElementById('cancel-payment-btn').addEventListener('click', function() {
+            if (confirm('Are you sure you want to cancel this payment?')) {
+                window.location.href = '{{ url_for("cancel_payment", checkout_id=session.get("active_payment_id")) }}';
+            }
+        });
+        
+        // Set up hide button
+        document.getElementById('hide-notification-btn').addEventListener('click', function() {
+            document.getElementById('payment-notification').style.display = 'none';
+        });
+        {% endif %}
+    });
+    
+    function showPaymentNotification() {
+        document.getElementById('payment-notification').style.display = 'block';
+    }
+</script>
 {% endblock %}
