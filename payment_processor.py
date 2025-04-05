@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Payment processing queue
 payment_queue = queue.Queue()
-# Transaction status tracking
+# Transaction status tracking - this will be per user (username -> dict of transactions)
 transaction_status = {}
 # Stop event for background worker
 stop_event = threading.Event()
@@ -93,7 +93,9 @@ def initiate_payment_async(mongo_db, username, amount, subscription_type, callba
         logger.info(f"Added payment to queue: {checkout_id}")
         
         # Initialize status tracking
-        transaction_status[checkout_id] = 'queued'
+        if username not in transaction_status:
+            transaction_status[username] = {}
+        transaction_status[username][checkout_id] = 'queued'
         
         return checkout_id, "Payment queued for processing", True
         
@@ -125,7 +127,10 @@ def process_payment_queue_worker(mongo_db):
             callback_url = transaction_data.get('callback_url', 'https://example.com/callback')
             
             logger.info(f"Processing payment from queue: {checkout_id}")
-            transaction_status[checkout_id] = 'processing'
+            
+            # Update status to processing
+            if username in transaction_status:
+                transaction_status[username][checkout_id] = 'processing'
             
             # Update MongoDB status
             if mongo_db is not None:
@@ -147,10 +152,13 @@ def process_payment_queue_worker(mongo_db):
             
             # Update transaction status
             if success:
-                transaction_status[checkout_id] = 'completed' if result.get('instant_success', False) else 'pending'
-                logger.info(f"Payment processed successfully: {checkout_id}, status: {transaction_status[checkout_id]}")
+                status = 'completed' if result.get('instant_success', False) else 'pending'
+                if username in transaction_status:
+                    transaction_status[username][checkout_id] = status
+                logger.info(f"Payment processed successfully: {checkout_id}, status: {status}")
             else:
-                transaction_status[checkout_id] = 'failed'
+                if username in transaction_status:
+                    transaction_status[username][checkout_id] = 'failed'
                 logger.error(f"Payment processing failed: {checkout_id}, error: {result.get('error', 'Unknown error')}")
             
             # Mark task as done
@@ -173,6 +181,7 @@ def process_payment(mongo_db, username, amount, subscription_type, checkout_id, 
         if mongo_db is not None:
             user = mongo_db.users.find_one({'username': username})
             if not user:
+                update_transaction_failed(mongo_db, checkout_id, username, "User not found")
                 return False, {'error': 'User not found'}
             
             # Format phone for API
@@ -186,6 +195,7 @@ def process_payment(mongo_db, username, amount, subscription_type, checkout_id, 
         api_base_url = Config.API_BASE_URL
         
         if not api_key:
+            update_transaction_failed(mongo_db, checkout_id, username, "API key not configured")
             return False, {'error': 'API key not configured'}
         
         # Prepare API request
@@ -202,240 +212,251 @@ def process_payment(mongo_db, username, amount, subscription_type, checkout_id, 
         
         logger.info(f"Sending payment request: {checkout_id}, phone: {phone}, amount: {amount}")
         
-        # Send payment request to API
-        response = requests.post(
-            f"{api_base_url}/request/stk",
-            headers=headers,
-            json=payload,
-            timeout=30  # 30 second timeout
-        )
-        
-        logger.info(f"Payment API response: {checkout_id}, status: {response.status_code}, body: {response.text}")
-        
-        # Process response
-        if response.status_code == 200:
-            response_data = response.json()
+        try:
+            # Send payment request to API with increased timeout
+            response = requests.post(
+                f"{api_base_url}/request/stk",
+                headers=headers,
+                json=payload,
+                timeout=45  # Increased from 30 to 45 seconds
+            )
             
-            # Process successful response
-            if mongo_db is not None:
-                # Start MongoDB transaction
-                with mongo_db.client.start_session() as session:
-                    session.start_transaction()
-                    try:
-                        # Check for successful immediate response
-                        if response_data.get('message') == 'callback received successfully' and 'data' in response_data:
-                            # Payment was immediately successful
-                            data = response_data['data']
-                            real_checkout_id = data.get('CheckoutRequestID', checkout_id)
-                            reference = data.get('refference', 'DIRECT')  # Note: API uses "refference" with two f's
-                            
-                            # Update checkout_id if the API returned a different one
-                            if real_checkout_id != checkout_id:
-                                # Create new records with correct ID
-                                mongo_db.transactions.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {
-                                        'real_checkout_id': real_checkout_id,
-                                        'status': 'completed',
-                                        'reference': reference,
-                                        'updated_at': datetime.now()
-                                    }}
-                                )
-                                
-                                mongo_db.payments.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {
-                                        'real_checkout_id': real_checkout_id,
-                                        'status': 'completed',
-                                        'reference': reference
-                                    }}
-                                )
-                            else:
-                                # Update existing records
-                                mongo_db.transactions.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {
-                                        'status': 'completed',
-                                        'reference': reference,
-                                        'updated_at': datetime.now()
-                                    }}
-                                )
-                                
-                                mongo_db.payments.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {
-                                        'status': 'completed',
-                                        'reference': reference
-                                    }}
-                                )
-                            
-                            # Update user's word count
-                            words_to_add = Config.BASIC_SUBSCRIPTION_WORDS if subscription_type == 'basic' else Config.PREMIUM_SUBSCRIPTION_WORDS
-                            mongo_db.users.update_one(
-                                {'username': username},
-                                {'$inc': {'words_remaining': words_to_add}}
-                            )
-                            
-                            session.commit_transaction()
-                            
-                            # Return success with instant success flag
-                            return True, {
-                                'checkout_id': real_checkout_id,
-                                'message': 'Payment completed successfully',
-                                'reference': reference,
-                                'instant_success': True
-                            }
-                            
-                        elif 'data' in response_data and 'CheckoutRequestID' in response_data['data']:
-                            # Payment initiated, waiting for user action and callback
-                            real_checkout_id = response_data['data']['CheckoutRequestID']
-                            
-                            # Update checkout_id if the API returned a different one
-                            if real_checkout_id != checkout_id:
-                                # Update existing records
-                                mongo_db.transactions.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {
-                                        'real_checkout_id': real_checkout_id,
-                                        'status': 'pending',
-                                        'updated_at': datetime.now()
-                                    }}
-                                )
-                                
-                                mongo_db.payments.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {
-                                        'real_checkout_id': real_checkout_id,
-                                        'status': 'pending'
-                                    }}
-                                )
-                            else:
-                                # Update existing records
-                                mongo_db.transactions.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {
-                                        'status': 'pending',
-                                        'updated_at': datetime.now()
-                                    }}
-                                )
-                                
-                                mongo_db.payments.update_one(
-                                    {'checkout_id': checkout_id},
-                                    {'$set': {'status': 'pending'}}
-                                )
-                            
-                            session.commit_transaction()
-                            
-                            # Return success but with pending status
-                            return True, {
-                                'checkout_id': real_checkout_id,
-                                'message': 'Payment initiated, waiting for confirmation',
-                                'instant_success': False
-                            }
-                        else:
-                            # Payment failed
-                            error_msg = response_data.get('message', 'Unknown payment error')
-                            mongo_db.transactions.update_one(
-                                {'checkout_id': checkout_id},
-                                {'$set': {
-                                    'status': 'failed',
-                                    'error': error_msg,
-                                    'updated_at': datetime.now()
-                                }}
-                            )
-                            
-                            mongo_db.payments.update_one(
-                                {'checkout_id': checkout_id},
-                                {'$set': {
-                                    'status': 'failed',
-                                    'reference': error_msg
-                                }}
-                            )
-                            
-                            session.commit_transaction()
-                            
-                            return False, {
-                                'error': error_msg,
-                                'checkout_id': checkout_id
-                            }
-                    except Exception as e:
-                        # Abort transaction on error
-                        session.abort_transaction()
-                        logger.error(f"Transaction error: {str(e)}")
-                        return False, {'error': str(e)}
-            else:
-                # MongoDB not available, just return the response
-                if response_data.get('message') == 'callback received successfully' and 'data' in response_data:
-                    return True, {
-                        'checkout_id': response_data['data'].get('CheckoutRequestID', checkout_id),
-                        'message': 'Payment completed successfully',
-                        'reference': response_data['data'].get('refference', 'DIRECT'),
-                        'instant_success': True
-                    }
-                elif 'data' in response_data and 'CheckoutRequestID' in response_data['data']:
-                    return True, {
-                        'checkout_id': response_data['data']['CheckoutRequestID'],
-                        'message': 'Payment initiated, waiting for confirmation',
-                        'instant_success': False
-                    }
-                else:
-                    return False, {
-                        'error': response_data.get('message', 'Unknown payment error'),
-                        'checkout_id': checkout_id
-                    }
-        else:
-            # Payment request failed
-            error_msg = f"Payment request failed with status code: {response.status_code}"
+            logger.info(f"Payment API response: {checkout_id}, status: {response.status_code}, body: {response.text}")
             
-            if mongo_db is not None:
-                mongo_db.transactions.update_one(
-                    {'checkout_id': checkout_id},
-                    {'$set': {
-                        'status': 'failed',
-                        'error': error_msg,
-                        'updated_at': datetime.now()
-                    }}
-                )
+            # Process response
+            if response.status_code == 200:
+                response_data = response.json()
                 
-                mongo_db.payments.update_one(
-                    {'checkout_id': checkout_id},
-                    {'$set': {
-                        'status': 'failed',
-                        'reference': error_msg
-                    }}
-                )
-            
+                # Process successful response
+                if mongo_db is not None:
+                    # Start MongoDB transaction
+                    with mongo_db.client.start_session() as session:
+                        session.start_transaction()
+                        try:
+                            # Check for successful immediate response
+                            if response_data.get('message') == 'callback received successfully' and 'data' in response_data:
+                                # Payment was immediately successful
+                                data = response_data['data']
+                                real_checkout_id = data.get('CheckoutRequestID', checkout_id)
+                                reference = data.get('refference', 'DIRECT')  # Note: API uses "refference" with two f's
+                                
+                                # Update checkout_id if the API returned a different one
+                                if real_checkout_id != checkout_id:
+                                    # Create new records with correct ID
+                                    mongo_db.transactions.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {
+                                            'real_checkout_id': real_checkout_id,
+                                            'status': 'completed',
+                                            'reference': reference,
+                                            'updated_at': datetime.now()
+                                        }}
+                                    )
+                                    
+                                    mongo_db.payments.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {
+                                            'real_checkout_id': real_checkout_id,
+                                            'status': 'completed',
+                                            'reference': reference
+                                        }}
+                                    )
+                                else:
+                                    # Update existing records
+                                    mongo_db.transactions.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {
+                                            'status': 'completed',
+                                            'reference': reference,
+                                            'updated_at': datetime.now()
+                                        }}
+                                    )
+                                    
+                                    mongo_db.payments.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {
+                                            'status': 'completed',
+                                            'reference': reference
+                                        }}
+                                    )
+                                
+                                # Update user's word count
+                                words_to_add = Config.BASIC_SUBSCRIPTION_WORDS if subscription_type == 'basic' else Config.PREMIUM_SUBSCRIPTION_WORDS
+                                mongo_db.users.update_one(
+                                    {'username': username},
+                                    {'$inc': {'words_remaining': words_to_add}}
+                                )
+                                
+                                session.commit_transaction()
+                                
+                                # Return success with instant success flag
+                                return True, {
+                                    'checkout_id': real_checkout_id,
+                                    'message': 'Payment completed successfully',
+                                    'reference': reference,
+                                    'instant_success': True
+                                }
+                                
+                            elif 'data' in response_data and 'CheckoutRequestID' in response_data['data']:
+                                # Payment initiated, waiting for user action and callback
+                                real_checkout_id = response_data['data']['CheckoutRequestID']
+                                
+                                # Update checkout_id if the API returned a different one
+                                if real_checkout_id != checkout_id:
+                                    # Update existing records
+                                    mongo_db.transactions.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {
+                                            'real_checkout_id': real_checkout_id,
+                                            'status': 'pending',
+                                            'updated_at': datetime.now()
+                                        }}
+                                    )
+                                    
+                                    mongo_db.payments.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {
+                                            'real_checkout_id': real_checkout_id,
+                                            'status': 'pending'
+                                        }}
+                                    )
+                                else:
+                                    # Update existing records
+                                    mongo_db.transactions.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {
+                                            'status': 'pending',
+                                            'updated_at': datetime.now()
+                                        }}
+                                    )
+                                    
+                                    mongo_db.payments.update_one(
+                                        {'checkout_id': checkout_id},
+                                        {'$set': {'status': 'pending'}}
+                                    )
+                                
+                                session.commit_transaction()
+                                
+                                # Return success but with pending status
+                                return True, {
+                                    'checkout_id': real_checkout_id,
+                                    'message': 'Payment initiated, waiting for confirmation',
+                                    'instant_success': False
+                                }
+                            else:
+                                # Payment failed
+                                error_msg = response_data.get('message', 'Unknown payment error')
+                                mongo_db.transactions.update_one(
+                                    {'checkout_id': checkout_id},
+                                    {'$set': {
+                                        'status': 'failed',
+                                        'error': error_msg,
+                                        'updated_at': datetime.now()
+                                    }}
+                                )
+                                
+                                mongo_db.payments.update_one(
+                                    {'checkout_id': checkout_id},
+                                    {'$set': {
+                                        'status': 'failed',
+                                        'reference': error_msg
+                                    }}
+                                )
+                                
+                                session.commit_transaction()
+                                
+                                return False, {
+                                    'error': error_msg,
+                                    'checkout_id': checkout_id
+                                }
+                        except Exception as e:
+                            # Abort transaction on error
+                            session.abort_transaction()
+                            logger.error(f"Transaction error: {str(e)}")
+                            update_transaction_failed(mongo_db, checkout_id, username, str(e))
+                            return False, {'error': str(e)}
+                else:
+                    # MongoDB not available, just return the response
+                    if response_data.get('message') == 'callback received successfully' and 'data' in response_data:
+                        return True, {
+                            'checkout_id': response_data['data'].get('CheckoutRequestID', checkout_id),
+                            'message': 'Payment completed successfully',
+                            'reference': response_data['data'].get('refference', 'DIRECT'),
+                            'instant_success': True
+                        }
+                    elif 'data' in response_data and 'CheckoutRequestID' in response_data['data']:
+                        return True, {
+                            'checkout_id': response_data['data']['CheckoutRequestID'],
+                            'message': 'Payment initiated, waiting for confirmation',
+                            'instant_success': False
+                        }
+                    else:
+                        return False, {
+                            'error': response_data.get('message', 'Unknown payment error'),
+                            'checkout_id': checkout_id
+                        }
+            else:
+                # Payment request failed
+                error_msg = f"Payment request failed with status code: {response.status_code}"
+                update_transaction_failed(mongo_db, checkout_id, username, error_msg)
+                return False, {
+                    'error': error_msg,
+                    'checkout_id': checkout_id
+                }
+                
+        except requests.exceptions.Timeout:
+            # Handle timeout specially
+            error_msg = "Payment request timed out. The server took too long to respond."
+            logger.error(f"Payment API timeout for {checkout_id}: {error_msg}")
+            update_transaction_failed(mongo_db, checkout_id, username, error_msg)
+            return False, {
+                'error': error_msg,
+                'checkout_id': checkout_id
+            }
+        except requests.exceptions.RequestException as e:
+            # Handle other request exceptions
+            error_msg = f"Payment request error: {str(e)}"
+            logger.error(f"Payment API error for {checkout_id}: {error_msg}")
+            update_transaction_failed(mongo_db, checkout_id, username, error_msg)
             return False, {
                 'error': error_msg,
                 'checkout_id': checkout_id
             }
     
     except Exception as e:
-        logger.error(f"Payment processing error: {str(e)}")
-        
-        # Update MongoDB records if available
-        if mongo_db is not None:
-            try:
-                mongo_db.transactions.update_one(
-                    {'checkout_id': checkout_id},
-                    {'$set': {
-                        'status': 'error',
-                        'error': str(e),
-                        'updated_at': datetime.now()
-                    }}
-                )
-                
-                mongo_db.payments.update_one(
-                    {'checkout_id': checkout_id},
-                    {'$set': {
-                        'status': 'error',
-                        'reference': str(e)
-                    }}
-                )
-            except Exception as db_error:
-                logger.error(f"Error updating transaction status: {str(db_error)}")
-        
-        return False, {'error': str(e)}
+        # Handle all other exceptions
+        error_msg = f"Payment processing error: {str(e)}"
+        logger.error(error_msg)
+        update_transaction_failed(mongo_db, checkout_id, username, error_msg)
+        return False, {'error': error_msg}
+
+def update_transaction_failed(mongo_db, checkout_id, username, error_msg):
+    """Helper function to update transaction status to failed"""
+    # Update in-memory tracking
+    if username in transaction_status:
+        transaction_status[username][checkout_id] = 'failed'
+    
+    # Update MongoDB if available
+    if mongo_db is not None:
+        try:
+            mongo_db.transactions.update_one(
+                {'checkout_id': checkout_id},
+                {'$set': {
+                    'status': 'failed',
+                    'error': error_msg,
+                    'updated_at': datetime.now()
+                }}
+            )
+            
+            mongo_db.payments.update_one(
+                {'checkout_id': checkout_id},
+                {'$set': {
+                    'status': 'failed',
+                    'reference': error_msg
+                }}
+            )
+        except Exception as db_error:
+            logger.error(f"Error updating transaction status: {str(db_error)}")
 
 def process_payment_callback(mongo_db, callback_data):
     """
@@ -473,13 +494,15 @@ def process_payment_callback(mongo_db, callback_data):
             logger.error(f"Transaction not found for checkout ID: {checkout_id}")
             return False, "Transaction not found"
         
+        # Get username from transaction
+        username = transaction['username']
+        
         # Process callback data
         with mongo_db.client.start_session() as session:
             session.start_transaction()
             try:
                 if success:
                     # Payment successful
-                    username = transaction['username']
                     subscription_type = transaction['subscription_type']
                     
                     # Update transaction status
@@ -509,9 +532,8 @@ def process_payment_callback(mongo_db, callback_data):
                     )
                     
                     # Update transaction status tracking
-                    transaction_id = transaction.get('checkout_id')
-                    if transaction_id in transaction_status:
-                        transaction_status[transaction_id] = 'completed'
+                    if username in transaction_status and checkout_id in transaction_status[username]:
+                        transaction_status[username][checkout_id] = 'completed'
                     
                     logger.info(f"Payment successful for {username}, added {words_to_add} words")
                     session.commit_transaction()
@@ -540,9 +562,8 @@ def process_payment_callback(mongo_db, callback_data):
                     )
                     
                     # Update transaction status tracking
-                    transaction_id = transaction.get('checkout_id')
-                    if transaction_id in transaction_status:
-                        transaction_status[transaction_id] = 'failed'
+                    if username in transaction_status and checkout_id in transaction_status[username]:
+                        transaction_status[username][checkout_id] = 'failed'
                     
                     logger.warning(f"Payment failed for {transaction['username']}: {reason}")
                     session.commit_transaction()
@@ -563,8 +584,8 @@ def get_transaction_status(mongo_db, checkout_id, username=None):
     """
     try:
         # Check in-memory status first (for recently queued transactions)
-        if checkout_id in transaction_status:
-            status = transaction_status[checkout_id]
+        if username and username in transaction_status and checkout_id in transaction_status[username]:
+            status = transaction_status[username][checkout_id]
             # For completed or failed transactions, verify with database
             if status in ['completed', 'failed'] and mongo_db is not None:
                 try:
@@ -608,6 +629,12 @@ def get_transaction_status(mongo_db, checkout_id, username=None):
                         'message': 'Unauthorized access to transaction'
                     }
                 
+                # Update in-memory tracking if found in database
+                db_username = transaction['username']
+                if db_username not in transaction_status:
+                    transaction_status[db_username] = {}
+                transaction_status[db_username][checkout_id] = transaction['status']
+                
                 return {
                     'status': transaction['status'],
                     'reference': transaction.get('reference', 'N/A'),
@@ -627,6 +654,20 @@ def get_transaction_status(mongo_db, checkout_id, username=None):
             'message': f'Error checking status: {str(e)}',
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
+
+def clear_transaction_status(username, checkout_id):
+    """
+    Clear a transaction status from in-memory tracking
+    This is used when a payment is cancelled or completed
+    """
+    if username in transaction_status and checkout_id in transaction_status[username]:
+        del transaction_status[username][checkout_id]
+        # Clean up empty user entries
+        if not transaction_status[username]:
+            del transaction_status[username]
+        logger.info(f"Cleared transaction status for {username}, checkout_id: {checkout_id}")
+        return True
+    return False
 
 def start_payment_processor(mongo_db):
     """Start the payment processor background thread"""
