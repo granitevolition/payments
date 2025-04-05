@@ -1,76 +1,159 @@
-{% extends "base.html" %}
+{% extends 'base.html' %}
 
-{% block title %}Payment Processing - Lipia Subscription Service{% endblock %}
+{% block title %}Payment Processing{% endblock %}
+
+{% block styles %}
+<style>
+    .payment-processing-container {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        text-align: center;
+    }
+
+    .status-indicator {
+        width: 120px;
+        height: 120px;
+        margin: 20px auto;
+        border-radius: 50%;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .status-pending {
+        background-color: #f8f9fa;
+        border: 5px solid #6c757d;
+        animation: pulse 1.5s infinite;
+    }
+
+    .status-success {
+        background-color: #d4edda;
+        border: 5px solid #28a745;
+    }
+
+    .status-failed {
+        background-color: #f8d7da;
+        border: 5px solid #dc3545;
+    }
+
+    .status-timeout {
+        background-color: #fff3cd;
+        border: 5px solid #ffc107;
+    }
+
+    .status-unknown {
+        background-color: #f8f9fa;
+        border: 5px solid #6c757d;
+    }
+
+    .status-icon {
+        font-size: 48px;
+        color: #495057;
+    }
+
+    .payment-details {
+        margin: 20px 0;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 4px;
+    }
+
+    .payment-details p {
+        margin: 5px 0;
+        font-size: 16px;
+    }
+
+    .payment-status-message {
+        font-size: 18px;
+        font-weight: bold;
+        margin: 15px 0;
+    }
+
+    .payment-timeout-message {
+        display: none;
+        margin-top: 20px;
+        padding: 10px;
+        background-color: #fff3cd;
+        border: 1px solid #ffeeba;
+        border-radius: 4px;
+    }
+
+    .btn-cancel {
+        margin-top: 20px;
+    }
+
+    /* Pulse animation for pending status */
+    @keyframes pulse {
+        0% {
+            transform: scale(1);
+            opacity: 1;
+        }
+        50% {
+            transform: scale(1.05);
+            opacity: 0.8;
+        }
+        100% {
+            transform: scale(1);
+            opacity: 1;
+        }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-6">
-        <div class="card shadow">
-            <div class="card-header bg-primary text-white">
-                <h4 class="card-title mb-0">Payment Processing</h4>
-            </div>
-            <div class="card-body text-center">
-                <div class="py-4">
-                    <div class="mb-4">
-                        <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                    </div>
-                    
-                    <h5 class="mb-3">Payment in Progress</h5>
-                    <p>An M-PESA payment request has been sent to your phone ({{ phone_number }}).</p>
-                    <p>Please check your phone and approve the payment of ${{ amount }}.</p>
-                    <p id="status-message">Waiting for payment...</p>
-                    
-                    <div class="alert alert-info">
-                        <p class="mb-0"><strong>Transaction ID:</strong> {{ checkout_id }}</p>
-                    </div>
-                    
-                    <div class="d-grid mt-4">
-                        <a href="{{ url_for('cancel_payment', checkout_id=checkout_id) }}" class="btn btn-danger">Cancel Payment</a>
-                    </div>
-                </div>
-            </div>
+<div class="container mt-5">
+    <div class="payment-processing-container">
+        <h2>Payment Processing</h2>
+        
+        <div id="payment-status-indicator" class="status-indicator status-pending">
+            <i class="fa fa-clock status-icon"></i>
         </div>
+        
+        <div id="payment-status-message" class="payment-status-message">
+            Initializing payment...
+        </div>
+        
+        <div class="payment-details">
+            <p><strong>Amount:</strong> ${{ amount }}</p>
+            <p><strong>Subscription:</strong> {{ subscription_type|title }}</p>
+            <p><strong>Phone:</strong> {{ phone_number }}</p>
+            <p><strong>Transaction ID:</strong> <small>{{ checkout_id }}</small></p>
+        </div>
+        
+        <p class="text-muted">
+            An M-PESA payment request has been sent to your phone. 
+            Please check your phone and approve the payment.
+        </p>
+        
+        <div id="payment-timeout-message" class="payment-timeout-message">
+            <p>The payment process is taking longer than expected. You can:</p>
+            <p>1. Continue waiting - your payment might still be processing</p>
+            <p>2. Check your dashboard later to see if the payment completed</p>
+            <p>3. Try again with a new payment if you did not approve this one</p>
+            <a href="{{ url_for('dashboard') }}" class="btn btn-primary mt-2">Go to Dashboard</a>
+        </div>
+        
+        <button onclick="cancelPayment('{{ checkout_id }}', '{{ url_for('cancel_payment', checkout_id='') }}')" class="btn btn-danger btn-cancel">
+            Cancel Payment
+        </button>
     </div>
 </div>
 {% endblock %}
 
-{% block extra_js %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/payment.js') }}"></script>
 <script>
-    // Function to check payment status
-    function checkPaymentStatus() {
-        fetch('{{ url_for("check_payment_status", checkout_id=checkout_id) }}')
-            .then(response => response.json())
-            .then(data => {
-                // Update status message
-                document.getElementById('status-message').textContent = data.message;
-                
-                // If payment is completed or failed, redirect
-                if (data.status === 'completed') {
-                    window.location.href = '{{ url_for("payment_success", checkout_id=checkout_id) }}';
-                } else if (data.status === 'failed' || data.status === 'cancelled') {
-                    window.location.href = '{{ url_for("payment_failed", checkout_id=checkout_id) }}';
-                } else {
-                    // Check again in 3 seconds
-                    setTimeout(checkPaymentStatus, 3000);
-                }
-            })
-            .catch(error => {
-                console.error('Error checking payment status:', error);
-                // Check again in 5 seconds (longer interval on error)
-                setTimeout(checkPaymentStatus, 5000);
-            });
-    }
-    
-    // Start checking payment status when page loads
+    // Start polling for payment status when the page loads
     document.addEventListener('DOMContentLoaded', function() {
-        checkPaymentStatus();
-        
-        // Set timeout for payment (2 minutes)
-        setTimeout(function() {
-            window.location.href = '{{ url_for("payment_timeout", checkout_id=checkout_id) }}';
-        }, 120000);
+        startPaymentStatusPolling(
+            '{{ checkout_id }}', 
+            '{{ url_for('check_payment_status', checkout_id='') }}'
+        );
     });
 </script>
 {% endblock %}
