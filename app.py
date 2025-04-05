@@ -316,7 +316,7 @@ def subscription():
 @app.route('/process-payment/<int:amount>/<subscription_type>')
 @login_required
 def process_payment(amount, subscription_type):
-    """Process payment asynchronously and notify the user"""
+    """Process payment asynchronously and redirect to dashboard"""
     # Get callback URL
     callback_url = get_callback_url()
     logger.info(f"Using callback URL: {callback_url}")
@@ -331,14 +331,11 @@ def process_payment(amount, subscription_type):
     )
     
     if success:
-        # Show an informative flash message instead of a separate payment page
-        flash(f'Payment request sent! Please check your phone ({current_user.phone_number}) and confirm the M-Pesa payment of {Config.CURRENCY} {amount}. This may take a few moments to process.', 'info')
-        
         # Store the checkout ID in session for tracking
         session['active_payment_id'] = checkout_id
         session['payment_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Just redirect to dashboard where status will be checked via JavaScript
+        # Redirect to dashboard without flash message (status will show in the dashboard UI)
         return redirect(url_for('dashboard'))
     else:
         # Payment failed or error occurred
@@ -454,7 +451,7 @@ def cancel_payment(checkout_id):
 @app.route('/payment-success/<checkout_id>')
 @login_required
 def payment_success(checkout_id):
-    """Show payment success page"""
+    """Handle payment success"""
     try:
         # Get transaction - try both checkout_id and real_checkout_id
         transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
@@ -473,20 +470,6 @@ def payment_success(checkout_id):
         # Check if transaction is successful
         if transaction['status'] != 'completed':
             flash(f'Payment is not completed. Current status: {transaction["status"]}', 'warning')
-            return redirect(url_for('dashboard'))
-        
-        # Get payment details
-        payment = None
-        if 'real_checkout_id' in transaction and transaction['real_checkout_id']:
-            # Try first with real_checkout_id
-            payment = mongo_db.payments.find_one({'checkout_id': transaction['real_checkout_id']})
-            
-        if not payment:
-            # Fallback to original checkout_id
-            payment = mongo_db.payments.find_one({'checkout_id': checkout_id})
-        
-        if not payment:
-            flash('Payment record not found.', 'warning')
             return redirect(url_for('dashboard'))
         
         # Clear session tracking
@@ -510,7 +493,7 @@ def payment_success(checkout_id):
 @app.route('/payment-failed/<checkout_id>')
 @login_required
 def payment_failed(checkout_id):
-    """Show payment failed information"""
+    """Handle payment failure"""
     try:
         # Get transaction - try both checkout_id and real_checkout_id
         transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
