@@ -142,7 +142,7 @@
             <div class="subscription-card">
                 <div class="card-header">
                     <div class="plan-name">Basic Plan</div>
-                    <div class="plan-price">${{ config.BASIC_SUBSCRIPTION_AMOUNT }}</div>
+                    <div class="plan-price">{{ config.CURRENCY }} {{ config.BASIC_SUBSCRIPTION_AMOUNT }}</div>
                 </div>
                 <div class="card-body">
                     <ul class="feature-list">
@@ -163,7 +163,7 @@
             <div class="subscription-card">
                 <div class="card-header premium-header">
                     <div class="plan-name">Premium Plan</div>
-                    <div class="plan-price">${{ config.PREMIUM_SUBSCRIPTION_AMOUNT }}</div>
+                    <div class="plan-price">{{ config.CURRENCY }} {{ config.PREMIUM_SUBSCRIPTION_AMOUNT }}</div>
                     <div class="most-popular">BEST VALUE</div>
                 </div>
                 <div class="card-body">
@@ -202,7 +202,7 @@
 {% block scripts %}
 <script>
     function confirmSubscription(amount, plan, words) {
-        if (confirm(`You are about to purchase the ${plan} plan for $${amount} which includes ${words} words. Proceed with payment?`)) {
+        if (confirm(`You are about to purchase the ${plan} plan for ${amount} KSH which includes ${words} words. Proceed with payment?`)) {
             window.location.href = `/process-payment/${amount}/${plan}`;
         }
     }
