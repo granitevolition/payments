@@ -20,7 +20,14 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Initialize MongoDB
+# Ensure MONGO_URI is set correctly
+if not app.config.get('MONGO_URI'):
+    logger.error("MONGO_URI is not set in config!")
+else:
+    logger.info(f"MONGO_URI is set to: {app.config.get('MONGO_URI')}")
+
+# Initialize MongoDB with explicit URI
+app.config['MONGO_URI'] = Config.MONGO_URI
 mongo.init_app(app)
 
 # Initialize Bcrypt
@@ -285,4 +292,16 @@ def internal_server_error(e):
 
 # Run the app
 if __name__ == '__main__':
+    # Create database collections if they don't exist
+    with app.app_context():
+        # Ensure indexes for performance
+        try:
+            mongo.db.users.create_index([('username', 1)], unique=True)
+            mongo.db.payments.create_index([('checkout_id', 1)], unique=True)
+            mongo.db.transactions.create_index([('checkout_id', 1)], unique=True)
+            logger.info("MongoDB indexes created successfully")
+        except Exception as e:
+            logger.error(f"Error creating MongoDB indexes: {str(e)}")
+    
+    # Start the Flask application
     app.run(debug=Config.DEBUG, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
