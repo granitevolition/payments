@@ -2,16 +2,13 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
-import pymongo
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
-from flask_pymongo import PyMongo
-from flask_bcrypt import Bcrypt
+from werkzeug.security import generate_password_hash, check_password_hash
 from bson.objectid import ObjectId
-
+import pymongo
+from flask_bcrypt import Bcrypt
 from config import Config
-from forms import RegistrationForm, LoginForm, UseWordsForm
-from utils import format_phone_for_api
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,39 +18,49 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Create MongoDB client directly
-# Ensure MONGO_URI is set correctly
-if not app.config.get('MONGO_URI'):
-    logger.error("MONGO_URI is not set in config!")
-else:
-    logger.info(f"MONGO_URI is set to: {app.config.get('MONGO_URI')}")
+# Create MongoDB connection directly
+mongo_client = None
+mongo_db = None
 
-# Initialize MongoDB and Flask extensions
-mongo = PyMongo(app)
-bcrypt = Bcrypt(app)
-
-# Check MongoDB connection
 try:
-    # Force a command to check the connection
-    mongo.db.command('ping')
+    # Create MongoDB client with explicit timeout
+    mongo_uri = app.config.get('MONGO_URI')
+    logger.info(f"Connecting to MongoDB: {mongo_uri}")
+    
+    # Create a direct connection to MongoDB
+    mongo_client = pymongo.MongoClient(
+        mongo_uri,
+        serverSelectionTimeoutMS=5000,  # 5 second timeout for server selection
+        connectTimeoutMS=5000,          # 5 second timeout for connection
+        socketTimeoutMS=30000           # 30 second timeout for socket operations
+    )
+    
+    # Test the connection
+    mongo_client.admin.command('ping')
     logger.info("MongoDB connection successful!")
     
+    # Get the database
+    mongo_db = mongo_client.get_database()
+    logger.info(f"Connected to database: {mongo_db.name}")
+    
     # Create indexes for better performance
-    mongo.db.users.create_index([('username', 1)], unique=True)
-    mongo.db.payments.create_index([('checkout_id', 1)], unique=True)
-    mongo.db.transactions.create_index([('checkout_id', 1)], unique=True)
+    mongo_db.users.create_index([('username', 1)], unique=True)
+    mongo_db.payments.create_index([('checkout_id', 1)])
+    mongo_db.transactions.create_index([('checkout_id', 1)])
     logger.info("MongoDB indexes created successfully")
+    
 except Exception as e:
     logger.error(f"MongoDB connection error: {str(e)}")
+    # Don't exit, let the application continue but with limited functionality
+
+# Initialize Bcrypt for password hashing
+bcrypt = Bcrypt(app)
 
 # Initialize Flask-Login
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
-
-# Import models after initializing mongo
-from models import User, Payment, Transaction
 
 # User model for Flask-Login
 class UserLogin(UserMixin):
@@ -68,7 +75,11 @@ class UserLogin(UserMixin):
 @login_manager.user_loader
 def load_user(user_id):
     try:
-        user_data = mongo.db.users.find_one({'_id': ObjectId(user_id)})
+        if mongo_db is None:
+            logger.error("MongoDB not available when loading user")
+            return None
+            
+        user_data = mongo_db.users.find_one({'_id': ObjectId(user_id)})
         if not user_data:
             return None
         return UserLogin(user_data)
@@ -76,11 +87,14 @@ def load_user(user_id):
         logger.error(f"Error loading user: {str(e)}")
         return None
 
-# ------------------- Helper functions -------------------
-
+# Database operations with error handling
 def create_user(username, password, phone_number):
     """Create a new user"""
     try:
+        if mongo_db is None:
+            logger.error("MongoDB not available when creating user")
+            raise Exception("Database connection not available")
+            
         hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
         user = {
             'username': username,
@@ -90,7 +104,7 @@ def create_user(username, password, phone_number):
             'created_at': datetime.now(),
             'last_login': datetime.now()
         }
-        result = mongo.db.users.insert_one(user)
+        result = mongo_db.users.insert_one(user)
         user['_id'] = result.inserted_id
         return user
     except Exception as e:
@@ -100,7 +114,11 @@ def create_user(username, password, phone_number):
 def get_user_by_username(username):
     """Get a user by username"""
     try:
-        return mongo.db.users.find_one({'username': username})
+        if mongo_db is None:
+            logger.error("MongoDB not available when getting user")
+            return None
+            
+        return mongo_db.users.find_one({'username': username})
     except Exception as e:
         logger.error(f"Error in get_user_by_username: {str(e)}")
         return None
@@ -116,7 +134,11 @@ def check_password(username, password):
 def update_last_login(username):
     """Update last login time for user"""
     try:
-        mongo.db.users.update_one(
+        if mongo_db is None:
+            logger.error("MongoDB not available when updating last login")
+            return
+            
+        mongo_db.users.update_one(
             {'username': username},
             {'$set': {'last_login': datetime.now()}}
         )
@@ -126,6 +148,10 @@ def update_last_login(username):
 def update_word_count(username, words_to_add):
     """Update word count for a user"""
     try:
+        if mongo_db is None:
+            logger.error("MongoDB not available when updating word count")
+            return None
+            
         user = get_user_by_username(username)
         if not user:
             return None
@@ -133,7 +159,7 @@ def update_word_count(username, words_to_add):
         current_words = user.get('words_remaining', 0)
         new_word_count = current_words + words_to_add
         
-        mongo.db.users.update_one(
+        mongo_db.users.update_one(
             {'username': username},
             {'$set': {'words_remaining': new_word_count}}
         )
@@ -146,6 +172,10 @@ def update_word_count(username, words_to_add):
 def consume_words(username, words_to_use):
     """Consume words from a user's account"""
     try:
+        if mongo_db is None:
+            logger.error("MongoDB not available when consuming words")
+            return False, 0
+            
         user = get_user_by_username(username)
         if not user:
             return False, 0
@@ -157,7 +187,7 @@ def consume_words(username, words_to_use):
         
         new_word_count = current_words - words_to_use
         
-        mongo.db.users.update_one(
+        mongo_db.users.update_one(
             {'username': username},
             {'$set': {'words_remaining': new_word_count}}
         )
@@ -170,7 +200,11 @@ def consume_words(username, words_to_use):
 def get_user_payments(username):
     """Get all payments for a user"""
     try:
-        return list(mongo.db.payments.find({'username': username}).sort('timestamp', -1))
+        if mongo_db is None:
+            logger.error("MongoDB not available when getting payments")
+            return []
+            
+        return list(mongo_db.payments.find({'username': username}).sort('timestamp', -1))
     except Exception as e:
         logger.error(f"Error getting user payments: {str(e)}")
         return []
@@ -178,6 +212,10 @@ def get_user_payments(username):
 def create_payment(username, amount, subscription_type, status='pending', reference='N/A', checkout_id='N/A'):
     """Create a new payment record"""
     try:
+        if mongo_db is None:
+            logger.error("MongoDB not available when creating payment")
+            return None
+            
         payment = {
             'username': username,
             'amount': amount,
@@ -187,7 +225,7 @@ def create_payment(username, amount, subscription_type, status='pending', refere
             'timestamp': datetime.now(),
             'status': status
         }
-        result = mongo.db.payments.insert_one(payment)
+        result = mongo_db.payments.insert_one(payment)
         payment['_id'] = result.inserted_id
         return payment
     except Exception as e:
@@ -197,11 +235,15 @@ def create_payment(username, amount, subscription_type, status='pending', refere
 def update_payment_status(checkout_id, status, reference=None):
     """Update payment status"""
     try:
+        if mongo_db is None:
+            logger.error("MongoDB not available when updating payment status")
+            return
+            
         update_data = {'status': status}
         if reference:
             update_data['reference'] = reference
         
-        mongo.db.payments.update_one(
+        mongo_db.payments.update_one(
             {'checkout_id': checkout_id},
             {'$set': update_data}
         )
@@ -211,13 +253,17 @@ def update_payment_status(checkout_id, status, reference=None):
 def create_transaction(checkout_id, data):
     """Create a new transaction record"""
     try:
+        if mongo_db is None:
+            logger.error("MongoDB not available when creating transaction")
+            return None
+            
         transaction = {
             'checkout_id': checkout_id,
             **data,
             'created_at': datetime.now(),
             'updated_at': datetime.now()
         }
-        result = mongo.db.transactions.insert_one(transaction)
+        result = mongo_db.transactions.insert_one(transaction)
         transaction['_id'] = result.inserted_id
         return transaction
     except Exception as e:
@@ -227,7 +273,11 @@ def create_transaction(checkout_id, data):
 def get_transaction(checkout_id):
     """Get a transaction by checkout ID"""
     try:
-        return mongo.db.transactions.find_one({'checkout_id': checkout_id})
+        if mongo_db is None:
+            logger.error("MongoDB not available when getting transaction")
+            return None
+            
+        return mongo_db.transactions.find_one({'checkout_id': checkout_id})
     except Exception as e:
         logger.error(f"Error in get_transaction: {str(e)}")
         return None
@@ -235,6 +285,10 @@ def get_transaction(checkout_id):
 def update_transaction_status(checkout_id, status, reference=None):
     """Update transaction status"""
     try:
+        if mongo_db is None:
+            logger.error("MongoDB not available when updating transaction status")
+            return
+            
         update_data = {
             'status': status,
             'updated_at': datetime.now()
@@ -242,15 +296,40 @@ def update_transaction_status(checkout_id, status, reference=None):
         if reference:
             update_data['reference'] = reference
         
-        mongo.db.transactions.update_one(
+        mongo_db.transactions.update_one(
             {'checkout_id': checkout_id},
             {'$set': update_data}
         )
     except Exception as e:
         logger.error(f"Error updating transaction status: {str(e)}")
 
-# ------------------- Routes -------------------
+# Helper for formatting phone numbers
+def format_phone_for_api(phone):
+    """Format phone number to 07XXXXXXXX format required by API"""
+    # Ensure phone is a string
+    phone = str(phone)
 
+    # Remove any spaces, quotes or special characters
+    phone = ''.join(c for c in phone if c.isdigit())
+
+    # If it starts with 254, convert to local format
+    if phone.startswith('254'):
+        phone = '0' + phone[3:]
+
+    # Make sure it starts with 0
+    if not phone.startswith('0'):
+        phone = '0' + phone
+
+    # Ensure it's exactly 10 digits (07XXXXXXXX)
+    if len(phone) > 10:
+        phone = phone[:10]
+    elif len(phone) < 10:
+        logger.warning(f"Warning: Phone number {phone} is shorter than expected")
+
+    logger.info(f"Original phone: {phone} -> Formatted for API: {phone}")
+    return phone
+
+# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -260,6 +339,7 @@ def register():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
     
+    from forms import RegistrationForm
     form = RegistrationForm()
     
     if form.validate_on_submit():
@@ -282,6 +362,7 @@ def login():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
     
+    from forms import LoginForm
     form = LoginForm()
     
     if form.validate_on_submit():
@@ -291,6 +372,10 @@ def login():
         # Check if user exists and password is correct
         if check_password(username, password):
             user_data = get_user_by_username(username)
+            if not user_data:
+                flash('Error fetching user data. Please try again.', 'danger')
+                return render_template('login.html', form=form)
+                
             update_last_login(username)
             user = UserLogin(user_data)
             login_user(user)
@@ -325,6 +410,7 @@ def subscription():
 @app.route('/use-words', methods=['GET', 'POST'])
 @login_required
 def use_words():
+    from forms import UseWordsForm
     form = UseWordsForm()
     
     if form.validate_on_submit():
@@ -349,11 +435,7 @@ def use_words():
 @login_required
 def process_payment(amount, subscription_type):
     try:
-        # Build callback URL
-        host = request.host_url.rstrip('/')
-        callback_url = f"{host}/payment-callback"
-        
-        # Create a dummy successful payment for now (to be replaced with real payment processing)
+        # For demo purposes, create a simple successful payment
         checkout_id = f"demo_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         
         # Record the payment
@@ -515,6 +597,36 @@ def payment_timeout(checkout_id):
     
     flash('Payment process timed out. If you completed the payment, it may still process. Please check your dashboard later.', 'warning')
     return redirect(url_for('dashboard'))
+
+# Add a route to test MongoDB connection
+@app.route('/test-db')
+def test_db():
+    try:
+        if mongo_db is None:
+            return jsonify({
+                'status': 'error',
+                'message': 'MongoDB connection not established'
+            })
+            
+        # Test the connection by performing a simple operation
+        mongo_db.command('ping')
+        
+        # Get some basic stats about the database
+        db_stats = mongo_db.command('dbStats')
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'MongoDB connection is working',
+            'database': mongo_db.name,
+            'collections': db_stats.get('collections', 0),
+            'documents': db_stats.get('objects', 0)
+        })
+    except Exception as e:
+        logger.error(f"Error testing database: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'MongoDB connection error: {str(e)}'
+        })
 
 # Error handlers
 @app.errorhandler(404)
