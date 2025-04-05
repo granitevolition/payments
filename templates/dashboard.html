@@ -84,24 +84,23 @@
         color: #0c5460;
     }
     
-    /* Payment notification styling */
-    #payment-notification {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        background-color: #fff;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        padding: 20px;
-        max-width: 350px;
-        z-index: 1000;
+    /* Payment Status Section */
+    #payment-status-section {
         display: none;
+        margin-bottom: 20px;
     }
     
-    #payment-notification .spinner {
+    .payment-status-card {
+        border-left: 5px solid #3498db;
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 5px;
+    }
+    
+    .spinner {
         display: inline-block;
-        width: 24px;
-        height: 24px;
+        width: 20px;
+        height: 20px;
         border: 3px solid rgba(0,0,0,0.1);
         border-radius: 50%;
         border-top-color: #3498db;
@@ -112,6 +111,16 @@
     
     @keyframes spin {
         to { transform: rotate(360deg); }
+    }
+    
+    .payment-status-title {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+    
+    .payment-status-message {
+        margin-bottom: 15px;
     }
     
     .action-buttons button {
@@ -128,6 +137,21 @@
             <div class="dashboard-card">
                 <h2>Welcome, {{ current_user.username }}!</h2>
                 <p>This is your dashboard where you can manage your subscriptions and track word usage.</p>
+            </div>
+        </div>
+        
+        <!-- Payment Status Section (for active payments) -->
+        <div class="col-md-12">
+            <div id="payment-status-section" class="dashboard-card payment-status-card">
+                <div class="d-flex align-items-center mb-2">
+                    <div class="spinner"></div>
+                    <div class="payment-status-title" id="payment-status-title">Processing Payment</div>
+                </div>
+                <p class="payment-status-message" id="payment-status-message">Waiting for M-Pesa confirmation...</p>
+                <div class="action-buttons">
+                    <button id="cancel-payment-btn" class="btn btn-sm btn-danger">Cancel Payment</button>
+                    <button id="refresh-page-btn" class="btn btn-sm btn-primary">Refresh Page</button>
+                </div>
             </div>
         </div>
         
@@ -203,19 +227,6 @@
         </div>
     </div>
 </div>
-
-<!-- Payment notification overlay -->
-<div id="payment-notification">
-    <div class="d-flex align-items-center mb-3">
-        <div class="spinner"></div>
-        <h5 class="mb-0" id="payment-status-title">Processing Payment</h5>
-    </div>
-    <p id="payment-status-message">Waiting for M-Pesa confirmation...</p>
-    <div class="action-buttons">
-        <button id="cancel-payment-btn" class="btn btn-sm btn-outline-danger">Cancel</button>
-        <button id="hide-notification-btn" class="btn btn-sm btn-outline-secondary">Hide</button>
-    </div>
-</div>
 {% endblock %}
 
 {% block scripts %}
@@ -224,8 +235,8 @@
     document.addEventListener('DOMContentLoaded', function() {
         // Check if there's an active payment in session
         {% if session.get('active_payment_id') %}
-        // Show payment notification
-        showPaymentNotification();
+        // Show payment status section
+        showPaymentStatus();
         
         // Start polling for status
         startPaymentStatusPolling(
@@ -240,15 +251,15 @@
             }
         });
         
-        // Set up hide button
-        document.getElementById('hide-notification-btn').addEventListener('click', function() {
-            document.getElementById('payment-notification').style.display = 'none';
+        // Set up refresh button
+        document.getElementById('refresh-page-btn').addEventListener('click', function() {
+            window.location.reload();
         });
         {% endif %}
     });
     
-    function showPaymentNotification() {
-        document.getElementById('payment-notification').style.display = 'block';
+    function showPaymentStatus() {
+        document.getElementById('payment-status-section').style.display = 'block';
     }
 </script>
 {% endblock %}
