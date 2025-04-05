@@ -27,6 +27,9 @@ try:
     mongo_uri = app.config.get('MONGO_URI')
     logger.info(f"Connecting to MongoDB: {mongo_uri}")
     
+    # Define a database name to use
+    DB_NAME = "lipia_payments"
+    
     # Create a direct connection to MongoDB
     mongo_client = pymongo.MongoClient(
         mongo_uri,
@@ -39,9 +42,9 @@ try:
     mongo_client.admin.command('ping')
     logger.info("MongoDB connection successful!")
     
-    # Get the database
-    mongo_db = mongo_client.get_database()
-    logger.info(f"Connected to database: {mongo_db.name}")
+    # Get the database - specify the database name explicitly
+    mongo_db = mongo_client[DB_NAME]
+    logger.info(f"Connected to database: {DB_NAME}")
     
     # Create indexes for better performance
     mongo_db.users.create_index([('username', 1)], unique=True)
