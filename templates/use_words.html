@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Use Words - Lipia Subscription Service{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow">
+            <div class="card-header bg-primary text-white">
+                <h4 class="card-title mb-0">Use Words</h4>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h5 class="alert-heading">Your Word Balance</h5>
+                    <p class="mb-0">You currently have <strong>{{ current_user.words_remaining }}</strong> words remaining.</p>
+                </div>
+                
+                <form method="POST" action="{{ url_for('use_words') }}">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="mb-3">
+                        {{ form.words_to_use.label(class="form-label") }}
+                        {% if form.words_to_use.errors %}
+                            {{ form.words_to_use(class="form-control is-invalid") }}
+                            <div class="invalid-feedback">
+                                {% for error in form.words_to_use.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            {{ form.words_to_use(class="form-control") }}
+                        {% endif %}
+                        <small class="form-text text-muted">Enter the number of words you want to use.</small>
+                    </div>
+                    
+                    <div class="d-grid">
+                        {{ form.submit(class="btn btn-primary") }}
+                    </div>
+                </form>
+                
+                <div class="mt-4">
+                    <h5>How It Works</h5>
+                    <p>When you use words:</p>
+                    <ol>
+                        <li>The specified number of words will be deducted from your account balance.</li>
+                        <li>You can use these words for generating content with the Andikar AI system.</li>
+                        <li>If you don't have enough words, you'll need to <a href="{{ url_for('subscription') }}">purchase a subscription</a>.</li>
+                    </ol>
+                </div>
+            </div>
+            <div class="card-footer">
+                <div class="d-flex justify-content-between">
+                    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Back to Dashboard</a>
+                    <a href="{{ url_for('subscription') }}" class="btn btn-primary">Purchase More Words</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
