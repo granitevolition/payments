@@ -7,6 +7,7 @@
 let pollingInterval;
 let pollingCount = 0;
 const MAX_POLLING_COUNT = 120; // Stop polling after 120 attempts (2 minutes at 1 second intervals)
+const CURRENCY = 'KSH'; // Set currency to KSH
 
 /**
  * Start polling for payment status
