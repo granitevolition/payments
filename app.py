@@ -2,8 +2,7 @@ import os
 import json
 import logging
 import time
-import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,6 +10,7 @@ from bson.objectid import ObjectId
 import pymongo
 from flask_bcrypt import Bcrypt
 from config import Config
+import payment_processor  # Import our payment processor module
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,19 +25,19 @@ mongo_client = None
 mongo_db = None
 
 try:
-    # Create MongoDB client with explicit timeout
+    # Create MongoDB client with explicit timeout and options
     mongo_uri = app.config.get('MONGO_URI')
     logger.info(f"Connecting to MongoDB: {mongo_uri}")
     
-    # Define a database name to use
-    DB_NAME = "lipia_payments"
-    
-    # Create a direct connection to MongoDB
+    # Create a direct connection to MongoDB with optimized parameters from config
     mongo_client = pymongo.MongoClient(
         mongo_uri,
-        serverSelectionTimeoutMS=5000,  # 5 second timeout for server selection
-        connectTimeoutMS=5000,          # 5 second timeout for connection
-        socketTimeoutMS=30000           # 30 second timeout for socket operations
+        maxPoolSize=Config.MONGO_MAX_POOL_SIZE,
+        minPoolSize=Config.MONGO_MIN_POOL_SIZE,
+        maxIdleTimeMS=Config.MONGO_MAX_IDLE_TIME_MS,
+        serverSelectionTimeoutMS=Config.MONGO_SERVER_SELECTION_TIMEOUT_MS,
+        connectTimeoutMS=Config.MONGO_CONNECT_TIMEOUT_MS,
+        retryWrites=True
     )
     
     # Test the connection
@@ -45,14 +45,20 @@ try:
     logger.info("MongoDB connection successful!")
     
     # Get the database - specify the database name explicitly
-    mongo_db = mongo_client[DB_NAME]
-    logger.info(f"Connected to database: {DB_NAME}")
+    mongo_db = mongo_client[Config.MONGO_DB_NAME]
+    logger.info(f"Connected to database: {Config.MONGO_DB_NAME}")
     
     # Create indexes for better performance
     mongo_db.users.create_index([('username', 1)], unique=True)
     mongo_db.payments.create_index([('checkout_id', 1)])
     mongo_db.transactions.create_index([('checkout_id', 1)])
+    mongo_db.transactions.create_index([('real_checkout_id', 1)])
+    mongo_db.transactions.create_index([('username', 1)])
     logger.info("MongoDB indexes created successfully")
+    
+    # Start payment processor background thread
+    payment_worker_thread = payment_processor.start_payment_processor(mongo_db)
+    logger.info("Payment processor started")
     
 except Exception as e:
     logger.error(f"MongoDB connection error: {str(e)}")
@@ -214,297 +220,20 @@ def get_user_payments(username):
         logger.error(f"Error getting user payments: {str(e)}")
         return []
 
-def create_payment(username, amount, subscription_type, status='pending', reference='N/A', checkout_id='N/A'):
-    """Create a new payment record"""
-    try:
-        if mongo_db is None:
-            logger.error("MongoDB not available when creating payment")
-            return None
-            
-        payment = {
-            'username': username,
-            'amount': amount,
-            'reference': reference,
-            'checkout_id': checkout_id,
-            'subscription_type': subscription_type,
-            'timestamp': datetime.now(),
-            'status': status
-        }
-        result = mongo_db.payments.insert_one(payment)
-        payment['_id'] = result.inserted_id
-        return payment
-    except Exception as e:
-        logger.error(f"Error creating payment: {str(e)}")
-        return None
-
-def update_payment_status(checkout_id, status, reference=None):
-    """Update payment status"""
-    try:
-        if mongo_db is None:
-            logger.error("MongoDB not available when updating payment status")
-            return
-            
-        update_data = {'status': status}
-        if reference:
-            update_data['reference'] = reference
-        
-        mongo_db.payments.update_one(
-            {'checkout_id': checkout_id},
-            {'$set': update_data}
-        )
-    except Exception as e:
-        logger.error(f"Error updating payment status: {str(e)}")
-
-def create_transaction(checkout_id, data):
-    """Create a new transaction record"""
-    try:
-        if mongo_db is None:
-            logger.error("MongoDB not available when creating transaction")
-            return None
-            
-        transaction = {
-            'checkout_id': checkout_id,
-            **data,
-            'created_at': datetime.now(),
-            'updated_at': datetime.now()
-        }
-        result = mongo_db.transactions.insert_one(transaction)
-        transaction['_id'] = result.inserted_id
-        return transaction
-    except Exception as e:
-        logger.error(f"Error creating transaction: {str(e)}")
-        return None
-
-def get_transaction(checkout_id):
-    """Get a transaction by checkout ID"""
-    try:
-        if mongo_db is None:
-            logger.error("MongoDB not available when getting transaction")
-            return None
-            
-        return mongo_db.transactions.find_one({'checkout_id': checkout_id})
-    except Exception as e:
-        logger.error(f"Error in get_transaction: {str(e)}")
-        return None
-
-def update_transaction_status(checkout_id, status, reference=None):
-    """Update transaction status"""
-    try:
-        if mongo_db is None:
-            logger.error("MongoDB not available when updating transaction status")
-            return
-            
-        update_data = {
-            'status': status,
-            'updated_at': datetime.now()
-        }
-        if reference:
-            update_data['reference'] = reference
-        
-        mongo_db.transactions.update_one(
-            {'checkout_id': checkout_id},
-            {'$set': update_data}
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Error updating transaction status: {str(e)}")
-        return False
-
-# Helper for formatting phone numbers
-def format_phone_for_api(phone):
-    """Format phone number to 07XXXXXXXX format required by API"""
-    # Ensure phone is a string
-    phone = str(phone)
-
-    # Remove any spaces, quotes or special characters
-    phone = ''.join(c for c in phone if c.isdigit())
-
-    # If it starts with 254, convert to local format
-    if phone.startswith('254'):
-        phone = '0' + phone[3:]
-
-    # Make sure it starts with 0
-    if not phone.startswith('0'):
-        phone = '0' + phone
-
-    # Ensure it's exactly 10 digits (07XXXXXXXX)
-    if len(phone) > 10:
-        phone = phone[:10]
-    elif len(phone) < 10:
-        logger.warning(f"Warning: Phone number {phone} is shorter than expected")
-
-    logger.info(f"Original phone: {phone} -> Formatted for API: {phone}")
-    return phone
-
-# Payment processing function
-def initiate_mpesa_payment(username, amount, subscription_type):
-    """
-    Initiate an M-PESA payment request
-    Returns (checkout_id, status_message, success_flag)
-    """
-    try:
-        # Get user data
-        user = get_user_by_username(username)
-        if not user:
-            logger.error(f"User {username} not found for payment")
-            return None, "User not found", False
-        
-        # Format phone number for API
-        phone = format_phone_for_api(user['phone_number'])
-        
-        # Get API key and base URL
-        api_key = app.config.get('API_KEY')
-        api_base_url = app.config.get('API_BASE_URL')
-        
-        # Check if API key is set
-        if not api_key:
-            logger.error("API key not set for payment")
-            return None, "API key not configured", False
-            
-        # Build callback URL - use the public URL from config or fallback to the request host
-        callback_url = app.config.get('CALLBACK_URL')
-        if not callback_url:
-            # Use request hostname if available
-            if request:
-                host = request.host_url.rstrip('/')
-                callback_url = f"{host}/payment-callback"
-            else:
-                callback_url = "https://example.com/payment-callback"  # Fallback
-        
-        # Prepare API request
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json'
-        }
-        
-        # Add checkout_request_id to ensure idempotency
-        checkout_request_id = f"LIP{int(time.time())}{username[:5]}"
-        
-        payload = {
-            'phone': phone,
-            'amount': str(amount),
-            'callback_url': callback_url
-        }
-        
-        logger.info(f"Initiating payment: {phone}, ${amount}, {subscription_type}, {checkout_request_id}")
-        
-        # Start MongoDB transaction
-        with mongo_client.start_session() as session:
-            # Record pending transaction
-            transaction_data = {
-                'checkout_id': checkout_request_id,
-                'username': username,
-                'amount': amount,
-                'phone': phone,
-                'subscription_type': subscription_type,
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'status': 'pending'
-            }
-            
-            # Create transaction and payment records
-            session.start_transaction()
-            try:
-                # Create payment record
-                create_payment(
-                    username,
-                    amount,
-                    subscription_type,
-                    'pending',
-                    'N/A',
-                    checkout_request_id,
-                )
-                
-                # Create transaction record
-                create_transaction(checkout_request_id, transaction_data)
-                
-                # Send payment request to API
-                response = requests.post(
-                    f"{api_base_url}/request/stk",
-                    headers=headers,
-                    json=payload,
-                    timeout=30  # Timeout after 30 seconds
-                )
-                
-                logger.info(f"Payment API response: {response.status_code}: {response.text}")
-                
-                # Process response
-                if response.status_code == 200:
-                    response_data = response.json()
-                    
-                    # Check for successful immediate response
-                    if response_data.get('message') == 'callback received successfully' and 'data' in response_data:
-                        # Payment was immediately successful
-                        data = response_data['data']
-                        real_checkout_id = data.get('CheckoutRequestID', checkout_request_id)
-                        reference = data.get('refference', 'DIRECT')  # Note: API uses "refference" with two f's
-                        
-                        # Update checkout_id if the API returned a different one
-                        if real_checkout_id != checkout_request_id:
-                            # Update our records to use the API's checkout ID
-                            update_transaction_status(checkout_request_id, 'completed', reference)
-                            update_payment_status(checkout_request_id, 'completed', reference)
-                            
-                            # Add words to user's account
-                            words_to_add = 100 if subscription_type == 'basic' else 1000
-                            update_word_count(username, words_to_add)
-                            
-                            session.commit_transaction()
-                            return real_checkout_id, "Payment completed successfully", True
-                        
-                    elif 'data' in response_data and 'CheckoutRequestID' in response_data['data']:
-                        # Payment initiated, waiting for user action and callback
-                        real_checkout_id = response_data['data']['CheckoutRequestID']
-                        
-                        # Update checkout_id if the API returned a different one
-                        if real_checkout_id != checkout_request_id:
-                            # Update our transaction and payment records with the new ID
-                            transaction_data['checkout_id'] = real_checkout_id
-                            create_transaction(real_checkout_id, transaction_data)
-                            
-                            # Create a new payment record with the correct ID
-                            create_payment(
-                                username,
-                                amount,
-                                subscription_type,
-                                'pending',
-                                'N/A',
-                                real_checkout_id
-                            )
-                            
-                            # Mark the original records as replaced
-                            update_transaction_status(checkout_request_id, 'replaced', f"replaced by {real_checkout_id}")
-                            update_payment_status(checkout_request_id, 'replaced', f"replaced by {real_checkout_id}")
-                            
-                        session.commit_transaction()
-                        return real_checkout_id, "Payment initiated, waiting for confirmation", True
-                    else:
-                        # Payment failed
-                        error_msg = response_data.get('message', 'Unknown payment error')
-                        update_transaction_status(checkout_request_id, 'failed', error_msg)
-                        update_payment_status(checkout_request_id, 'failed', error_msg)
-                        session.commit_transaction()
-                        return checkout_request_id, f"Payment failed: {error_msg}", False
-                else:
-                    # Payment request failed
-                    error_msg = f"Payment request failed with status code: {response.status_code}"
-                    update_transaction_status(checkout_request_id, 'failed', error_msg)
-                    update_payment_status(checkout_request_id, 'failed', error_msg)
-                    session.commit_transaction()
-                    return checkout_request_id, error_msg, False
-                    
-            except Exception as e:
-                # Abort transaction and roll back changes
-                session.abort_transaction()
-                logger.error(f"Payment transaction error: {str(e)}")
-                return checkout_request_id, f"Payment error: {str(e)}", False
+def get_callback_url():
+    """Build the callback URL for payment notifications"""
+    # Use the explicitly configured callback URL if present
+    callback_url = app.config.get('CALLBACK_URL')
+    if callback_url:
+        return f"{callback_url.rstrip('/')}/payment-callback"
     
-    except requests.exceptions.Timeout:
-        logger.error("Payment API timeout")
-        return None, "Payment request timed out. Please try again.", False
-        
-    except Exception as e:
-        logger.error(f"Payment initialization error: {str(e)}")
-        return None, f"Payment error: {str(e)}", False
+    # Otherwise try to build it from the request
+    if request:
+        host = request.host_url.rstrip('/')
+        return f"{host}/payment-callback"
+    
+    # Fallback
+    return "https://example.com/payment-callback"
 
 # Routes
 @app.route('/')
@@ -611,29 +340,29 @@ def use_words():
 @app.route('/process-payment/<int:amount>/<subscription_type>')
 @login_required
 def process_payment(amount, subscription_type):
-    # Use the real payment API
-    checkout_id, message, success = initiate_mpesa_payment(
-        current_user.username, 
-        amount, 
-        subscription_type
+    """Process payment asynchronously and show payment processing page"""
+    # Get callback URL
+    callback_url = get_callback_url()
+    logger.info(f"Using callback URL: {callback_url}")
+    
+    # Initiate payment asynchronously
+    checkout_id, message, success = payment_processor.initiate_payment_async(
+        mongo_db,
+        current_user.username,
+        amount,
+        subscription_type,
+        callback_url
     )
     
     if success:
-        # If payment was immediately successful
-        if "completed successfully" in message:
-            # Show success message
-            words_to_add = 100 if subscription_type == 'basic' else 1000
-            flash(f'Payment processed successfully! {words_to_add} words have been added to your account.', 'success')
-            return redirect(url_for('dashboard'))
-        else:
-            # Payment is pending, show payment processing page
-            return render_template(
-                'payment_processing.html',
-                checkout_id=checkout_id,
-                amount=amount,
-                phone_number=current_user.phone_number,
-                subscription_type=subscription_type
-            )
+        # Show payment processing page
+        return render_template(
+            'payment_processing.html',
+            checkout_id=checkout_id,
+            amount=amount,
+            phone_number=current_user.phone_number,
+            subscription_type=subscription_type
+        )
     else:
         # Payment failed or error occurred
         flash(f'Payment processing failed: {message}', 'danger')
@@ -650,101 +379,33 @@ def payment_callback():
         callback_data = request.json
         logger.info(f"Received payment callback: {callback_data}")
         
-        # Extract checkout ID from callback data
-        checkout_id = callback_data.get('CheckoutRequestID')
-        if not checkout_id:
-            logger.error("No checkout ID in callback data")
-            return jsonify({'status': 'error', 'message': 'Missing checkout ID'}), 400
-            
-        # Get transaction
-        transaction = get_transaction(checkout_id)
-        if not transaction:
-            logger.error(f"Transaction not found for checkout ID: {checkout_id}")
-            return jsonify({'status': 'error', 'message': 'Transaction not found'}), 404
-            
-        # Extract reference number (for tracking)
-        reference = callback_data.get('reference', callback_data.get('refference', 'CB-REF'))
+        # Process the callback
+        success, message = payment_processor.process_payment_callback(mongo_db, callback_data)
         
-        # Get status from callback
-        # This will depend on the exact format your payment provider uses
-        success = callback_data.get('success', callback_data.get('status') == 'success')
-        
-        # Start MongoDB transaction for atomicity
-        with mongo_client.start_session() as session:
-            session.start_transaction()
-            try:
-                if success:
-                    # Payment successful
-                    # Update transaction status
-                    update_transaction_status(checkout_id, 'completed', reference)
-                    
-                    # Update payment record
-                    update_payment_status(checkout_id, 'completed', reference)
-                    
-                    # Get transaction details for processing
-                    username = transaction['username']
-                    subscription_type = transaction['subscription_type']
-                    
-                    # Update user's word count
-                    words_to_add = 100 if subscription_type == 'basic' else 1000
-                    update_word_count(username, words_to_add)
-                    
-                    logger.info(f"Payment successful for {username}, added {words_to_add} words")
-                    session.commit_transaction()
-                    return jsonify({'status': 'success'}), 200
-                else:
-                    # Payment failed
-                    reason = callback_data.get('reason', 'Unknown failure reason')
-                    
-                    # Update transaction status
-                    update_transaction_status(checkout_id, 'failed', reason)
-                    
-                    # Update payment record
-                    update_payment_status(checkout_id, 'failed', reason)
-                    
-                    logger.warning(f"Payment failed for {transaction['username']}: {reason}")
-                    session.commit_transaction()
-                    return jsonify({'status': 'success'}), 200
-            except Exception as e:
-                # Rollback transaction on error
-                session.abort_transaction()
-                logger.error(f"Error processing payment callback: {str(e)}")
-                return jsonify({'status': 'error', 'message': str(e)}), 500
+        # Return appropriate response
+        if success:
+            return jsonify({'status': 'success', 'message': message}), 200
+        else:
+            return jsonify({'status': 'error', 'message': message}), 400
     except Exception as e:
         logger.error(f"Error handling payment callback: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/check-payment-status/<checkout_id>')
-@login_required
 def check_payment_status(checkout_id):
     """
     Check payment status endpoint for AJAX polling
     This endpoint is called by the frontend to check payment status
     """
     try:
-        # Get transaction
-        transaction = get_transaction(checkout_id)
+        # Get current user's username if authenticated
+        username = current_user.username if current_user.is_authenticated else None
         
-        if not transaction:
-            return jsonify({
-                'status': 'error',
-                'message': 'Transaction not found'
-            })
+        # Check transaction status
+        status_data = payment_processor.get_transaction_status(mongo_db, checkout_id, username)
         
-        # Check if user is authorized to view this transaction
-        if transaction['username'] != current_user.username:
-            return jsonify({
-                'status': 'error',
-                'message': 'Unauthorized'
-            }), 403
-        
-        # Return transaction status
-        return jsonify({
-            'status': transaction['status'],
-            'message': get_status_message(transaction['status']),
-            'reference': transaction.get('reference', 'N/A'),
-            'timestamp': transaction.get('updated_at', datetime.now()).strftime('%Y-%m-%d %H:%M:%S')
-        })
+        # Return status data
+        return jsonify(status_data)
     except Exception as e:
         logger.error(f"Error checking payment status: {str(e)}")
         return jsonify({
@@ -752,27 +413,18 @@ def check_payment_status(checkout_id):
             'message': f'Error checking payment status: {str(e)}'
         })
 
-def get_status_message(status):
-    """Get user-friendly status message"""
-    status_messages = {
-        'pending': 'Waiting for payment confirmation...',
-        'completed': 'Payment completed successfully!',
-        'failed': 'Payment failed.',
-        'cancelled': 'Payment was cancelled.',
-        'timeout': 'Payment request timed out.',
-        'replaced': 'Payment request was replaced.',
-        'error': 'An error occurred during payment processing.'
-    }
-    return status_messages.get(status, f'Unknown status: {status}')
-
 @app.route('/cancel-payment/<checkout_id>')
 @login_required
 def cancel_payment(checkout_id):
     """Cancel a pending payment"""
     try:
         # Get transaction
-        transaction = get_transaction(checkout_id)
+        transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
         
+        if not transaction:
+            # Try with real_checkout_id
+            transaction = mongo_db.transactions.find_one({'real_checkout_id': checkout_id})
+            
         if not transaction:
             flash('Transaction not found.', 'danger')
             return redirect(url_for('dashboard'))
@@ -783,16 +435,33 @@ def cancel_payment(checkout_id):
             return redirect(url_for('dashboard'))
         
         # Check if transaction can be cancelled
-        if transaction['status'] not in ['pending']:
+        if transaction['status'] not in ['queued', 'pending', 'processing']:
             flash(f'Cannot cancel payment with status: {transaction["status"]}', 'warning')
             return redirect(url_for('dashboard'))
         
         # Update transaction status
-        update_transaction_status(checkout_id, 'cancelled', 'Cancelled by user')
+        mongo_db.transactions.update_one(
+            {'_id': transaction['_id']},
+            {'$set': {
+                'status': 'cancelled',
+                'error': 'Cancelled by user',
+                'updated_at': datetime.now()
+            }}
+        )
         
         # Update payment status
-        update_payment_status(checkout_id, 'cancelled', 'Cancelled by user')
+        mongo_db.payments.update_one(
+            {'checkout_id': checkout_id},
+            {'$set': {
+                'status': 'cancelled',
+                'reference': 'Cancelled by user'
+            }}
+        )
         
+        # Update in-memory tracking
+        if checkout_id in payment_processor.transaction_status:
+            payment_processor.transaction_status[checkout_id] = 'cancelled'
+            
         flash('Payment has been cancelled.', 'info')
         return redirect(url_for('dashboard'))
     except Exception as e:
@@ -805,9 +474,11 @@ def cancel_payment(checkout_id):
 def payment_success(checkout_id):
     """Show payment success page"""
     try:
-        # Get transaction
-        transaction = get_transaction(checkout_id)
-        
+        # Get transaction - try both checkout_id and real_checkout_id
+        transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
+        if not transaction:
+            transaction = mongo_db.transactions.find_one({'real_checkout_id': checkout_id})
+            
         if not transaction:
             flash('Transaction not found.', 'danger')
             return redirect(url_for('dashboard'))
@@ -823,7 +494,14 @@ def payment_success(checkout_id):
             return redirect(url_for('dashboard'))
         
         # Get payment details
-        payment = mongo_db.payments.find_one({'checkout_id': checkout_id})
+        payment = None
+        if 'real_checkout_id' in transaction and transaction['real_checkout_id']:
+            # Try first with real_checkout_id
+            payment = mongo_db.payments.find_one({'checkout_id': transaction['real_checkout_id']})
+            
+        if not payment:
+            # Fallback to original checkout_id
+            payment = mongo_db.payments.find_one({'checkout_id': checkout_id})
         
         if not payment:
             flash('Payment record not found.', 'warning')
@@ -832,7 +510,7 @@ def payment_success(checkout_id):
         # Show success message
         subscription_type = transaction['subscription_type']
         amount = transaction['amount']
-        words_added = 100 if subscription_type == 'basic' else 1000
+        words_added = Config.BASIC_SUBSCRIPTION_WORDS if subscription_type == 'basic' else Config.PREMIUM_SUBSCRIPTION_WORDS
         
         return render_template(
             'payment_success.html',
@@ -850,9 +528,11 @@ def payment_success(checkout_id):
 def payment_failed(checkout_id):
     """Show payment failed page"""
     try:
-        # Get transaction
-        transaction = get_transaction(checkout_id)
-        
+        # Get transaction - try both checkout_id and real_checkout_id
+        transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
+        if not transaction:
+            transaction = mongo_db.transactions.find_one({'real_checkout_id': checkout_id})
+            
         if not transaction:
             flash('Transaction not found.', 'danger')
             return redirect(url_for('dashboard'))
@@ -871,7 +551,7 @@ def payment_failed(checkout_id):
         return render_template(
             'payment_failed.html',
             transaction=transaction,
-            reason=transaction.get('reference', 'Unknown reason')
+            reason=transaction.get('error', 'Unknown reason')
         )
     except Exception as e:
         logger.error(f"Error showing payment failure: {str(e)}")
@@ -908,6 +588,42 @@ def test_db():
             'message': f'MongoDB connection error: {str(e)}'
         })
 
+# Add a route to test payment API
+@app.route('/test-payment-api')
+@login_required
+def test_payment_api():
+    try:
+        # Get callback URL
+        callback_url = get_callback_url()
+        
+        # Log test information
+        logger.info(f"Testing payment API with callback URL: {callback_url}")
+        logger.info(f"API Key: {app.config.get('API_KEY')}")
+        logger.info(f"API Base URL: {app.config.get('API_BASE_URL')}")
+        
+        # Get user phone number
+        user = get_user_by_username(current_user.username)
+        phone = user['phone_number'] if user else "NA"
+        
+        # Format phone for display
+        formatted_phone = payment_processor.format_phone_for_api(phone)
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Payment API test page',
+            'api_key': app.config.get('API_KEY'),
+            'api_base_url': app.config.get('API_BASE_URL'),
+            'callback_url': callback_url,
+            'phone': phone,
+            'formatted_phone': formatted_phone
+        })
+    except Exception as e:
+        logger.error(f"Error testing payment API: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error testing payment API: {str(e)}'
+        })
+
 # Error handlers
 @app.errorhandler(404)
 def page_not_found(e):
@@ -917,7 +633,19 @@ def page_not_found(e):
 def internal_server_error(e):
     return render_template('error.html', error_code=500, error_message='Internal server error'), 500
 
-# Run the app
+# Configuration for production
 if __name__ == '__main__':
-    # Start the Flask application
-    app.run(debug=Config.DEBUG, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    try:
+        # Get appropriate port
+        port = int(os.environ.get('PORT', 5000))
+        
+        # Start the Flask application
+        app.run(debug=Config.DEBUG, host='0.0.0.0', port=port)
+    except KeyboardInterrupt:
+        # Stop payment processor on shutdown
+        if 'payment_worker_thread' in locals():
+            logger.info("Stopping payment processor...")
+            payment_processor.stop_payment_processor()
+            logger.info("Payment processor stopped")
+    except Exception as e:
+        logger.error(f"Error starting application: {str(e)}")
