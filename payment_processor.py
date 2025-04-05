@@ -67,7 +67,7 @@ def initiate_payment_async(mongo_db, username, amount, subscription_type, callba
         }
         
         # Store in MongoDB first (before adding to queue)
-        if mongo_db:
+        if mongo_db is not None:
             try:
                 # Create transaction record
                 mongo_db.transactions.insert_one(transaction_data)
@@ -128,7 +128,7 @@ def process_payment_queue_worker(mongo_db):
             transaction_status[checkout_id] = 'processing'
             
             # Update MongoDB status
-            if mongo_db:
+            if mongo_db is not None:
                 try:
                     mongo_db.transactions.update_one(
                         {'checkout_id': checkout_id},
@@ -170,7 +170,7 @@ def process_payment(mongo_db, username, amount, subscription_type, checkout_id, 
     try:
         # Get user data from MongoDB
         user = None
-        if mongo_db:
+        if mongo_db is not None:
             user = mongo_db.users.find_one({'username': username})
             if not user:
                 return False, {'error': 'User not found'}
@@ -217,7 +217,7 @@ def process_payment(mongo_db, username, amount, subscription_type, checkout_id, 
             response_data = response.json()
             
             # Process successful response
-            if mongo_db:
+            if mongo_db is not None:
                 # Start MongoDB transaction
                 with mongo_db.client.start_session() as session:
                     session.start_transaction()
@@ -387,7 +387,7 @@ def process_payment(mongo_db, username, amount, subscription_type, checkout_id, 
             # Payment request failed
             error_msg = f"Payment request failed with status code: {response.status_code}"
             
-            if mongo_db:
+            if mongo_db is not None:
                 mongo_db.transactions.update_one(
                     {'checkout_id': checkout_id},
                     {'$set': {
@@ -414,7 +414,7 @@ def process_payment(mongo_db, username, amount, subscription_type, checkout_id, 
         logger.error(f"Payment processing error: {str(e)}")
         
         # Update MongoDB records if available
-        if mongo_db:
+        if mongo_db is not None:
             try:
                 mongo_db.transactions.update_one(
                     {'checkout_id': checkout_id},
@@ -459,7 +459,7 @@ def process_payment_callback(mongo_db, callback_data):
         success = callback_data.get('success', callback_data.get('status') == 'success')
         
         # Check if MongoDB is available
-        if not mongo_db:
+        if mongo_db is None:
             logger.error("MongoDB not available for payment callback")
             return False, "Database not available"
         
@@ -566,7 +566,7 @@ def get_transaction_status(mongo_db, checkout_id, username=None):
         if checkout_id in transaction_status:
             status = transaction_status[checkout_id]
             # For completed or failed transactions, verify with database
-            if status in ['completed', 'failed'] and mongo_db:
+            if status in ['completed', 'failed'] and mongo_db is not None:
                 try:
                     # Get from database for complete information
                     transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
@@ -594,7 +594,7 @@ def get_transaction_status(mongo_db, checkout_id, username=None):
             }
         
         # Not in memory, check database
-        if mongo_db:
+        if mongo_db is not None:
             transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
             if not transaction:
                 # Try with real_checkout_id
