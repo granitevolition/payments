@@ -184,7 +184,7 @@
                             <tr>
                                 <td>{{ payment.timestamp.strftime('%Y-%m-%d %H:%M') if payment.timestamp is not string else payment.timestamp }}</td>
                                 <td>{{ payment.subscription_type|capitalize }}</td>
-                                <td>${{ payment.amount }}</td>
+                                <td>{{ config.CURRENCY }} {{ payment.amount }}</td>
                                 <td>{{ payment.reference }}</td>
                                 <td>
                                     <span class="status-badge status-{{ payment.status }}">
