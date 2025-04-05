@@ -313,34 +313,10 @@ def dashboard():
 def subscription():
     return render_template('subscription.html')
 
-@app.route('/use-words', methods=['GET', 'POST'])
-@login_required
-def use_words():
-    from forms import UseWordsForm
-    form = UseWordsForm()
-    
-    if form.validate_on_submit():
-        words_to_use = form.words_to_use.data
-        
-        # Attempt to consume words
-        success, remaining = consume_words(current_user.username, words_to_use)
-        
-        if success:
-            flash(f'Successfully used {words_to_use} words. You now have {remaining} words remaining.', 'success')
-            # Update current_user's words_remaining attribute
-            current_user.user_data['words_remaining'] = remaining
-            current_user.words_remaining = remaining
-        else:
-            flash(f'Not enough words! You have {remaining} words remaining.', 'danger')
-        
-        return redirect(url_for('dashboard'))
-    
-    return render_template('use_words.html', form=form)
-
 @app.route('/process-payment/<int:amount>/<subscription_type>')
 @login_required
 def process_payment(amount, subscription_type):
-    """Process payment asynchronously and show payment processing page"""
+    """Process payment asynchronously and notify the user"""
     # Get callback URL
     callback_url = get_callback_url()
     logger.info(f"Using callback URL: {callback_url}")
@@ -355,14 +331,15 @@ def process_payment(amount, subscription_type):
     )
     
     if success:
-        # Show payment processing page
-        return render_template(
-            'payment_processing.html',
-            checkout_id=checkout_id,
-            amount=amount,
-            phone_number=current_user.phone_number,
-            subscription_type=subscription_type
-        )
+        # Show an informative flash message instead of a separate payment page
+        flash(f'Payment request sent! Please check your phone ({current_user.phone_number}) and confirm the M-Pesa payment of ${amount}. This may take a few moments to process.', 'info')
+        
+        # Store the checkout ID in session for tracking
+        session['active_payment_id'] = checkout_id
+        session['payment_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Just redirect to dashboard where status will be checked via JavaScript
+        return redirect(url_for('dashboard'))
     else:
         # Payment failed or error occurred
         flash(f'Payment processing failed: {message}', 'danger')
@@ -462,6 +439,11 @@ def cancel_payment(checkout_id):
         if checkout_id in payment_processor.transaction_status:
             payment_processor.transaction_status[checkout_id] = 'cancelled'
             
+        # Clear session tracking
+        if 'active_payment_id' in session and session['active_payment_id'] == checkout_id:
+            session.pop('active_payment_id', None)
+            session.pop('payment_timestamp', None)
+            
         flash('Payment has been cancelled.', 'info')
         return redirect(url_for('dashboard'))
     except Exception as e:
@@ -507,17 +489,19 @@ def payment_success(checkout_id):
             flash('Payment record not found.', 'warning')
             return redirect(url_for('dashboard'))
         
-        # Show success message
+        # Clear session tracking
+        if 'active_payment_id' in session:
+            session.pop('active_payment_id', None)
+            session.pop('payment_timestamp', None)
+        
+        # Show success message directly on dashboard
         subscription_type = transaction['subscription_type']
         amount = transaction['amount']
         words_added = Config.BASIC_SUBSCRIPTION_WORDS if subscription_type == 'basic' else Config.PREMIUM_SUBSCRIPTION_WORDS
         
-        return render_template(
-            'payment_success.html',
-            transaction=transaction,
-            payment=payment,
-            words_added=words_added
-        )
+        flash(f'Payment of ${amount} was successful! {words_added} words have been added to your account.', 'success')
+        return redirect(url_for('dashboard'))
+        
     except Exception as e:
         logger.error(f"Error showing payment success: {str(e)}")
         flash(f'Error showing payment success: {str(e)}', 'danger')
@@ -526,7 +510,7 @@ def payment_success(checkout_id):
 @app.route('/payment-failed/<checkout_id>')
 @login_required
 def payment_failed(checkout_id):
-    """Show payment failed page"""
+    """Show payment failed information"""
     try:
         # Get transaction - try both checkout_id and real_checkout_id
         transaction = mongo_db.transactions.find_one({'checkout_id': checkout_id})
@@ -547,12 +531,16 @@ def payment_failed(checkout_id):
             flash(f'Payment has not failed. Current status: {transaction["status"]}', 'warning')
             return redirect(url_for('dashboard'))
         
-        # Show failure message
-        return render_template(
-            'payment_failed.html',
-            transaction=transaction,
-            reason=transaction.get('error', 'Unknown reason')
-        )
+        # Clear session tracking
+        if 'active_payment_id' in session:
+            session.pop('active_payment_id', None)
+            session.pop('payment_timestamp', None)
+        
+        # Show failure message directly on dashboard
+        reason = transaction.get('error', 'Unknown reason')
+        flash(f'Payment failed: {reason}. Please try again or contact support if the issue persists.', 'danger')
+        return redirect(url_for('dashboard'))
+        
     except Exception as e:
         logger.error(f"Error showing payment failure: {str(e)}")
         flash(f'Error showing payment failure: {str(e)}', 'danger')
