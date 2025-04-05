@@ -332,7 +332,7 @@ def process_payment(amount, subscription_type):
     
     if success:
         # Show an informative flash message instead of a separate payment page
-        flash(f'Payment request sent! Please check your phone ({current_user.phone_number}) and confirm the M-Pesa payment of ${amount}. This may take a few moments to process.', 'info')
+        flash(f'Payment request sent! Please check your phone ({current_user.phone_number}) and confirm the M-Pesa payment of {Config.CURRENCY} {amount}. This may take a few moments to process.', 'info')
         
         # Store the checkout ID in session for tracking
         session['active_payment_id'] = checkout_id
@@ -499,7 +499,7 @@ def payment_success(checkout_id):
         amount = transaction['amount']
         words_added = Config.BASIC_SUBSCRIPTION_WORDS if subscription_type == 'basic' else Config.PREMIUM_SUBSCRIPTION_WORDS
         
-        flash(f'Payment of ${amount} was successful! {words_added} words have been added to your account.', 'success')
+        flash(f'Payment of {Config.CURRENCY} {amount} was successful! {words_added} words have been added to your account.', 'success')
         return redirect(url_for('dashboard'))
         
     except Exception as e:
