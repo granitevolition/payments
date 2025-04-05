@@ -88,6 +88,7 @@
     #payment-status-section {
         display: none;
         margin-bottom: 20px;
+        position: relative;
     }
     
     .payment-status-card {
@@ -126,6 +127,19 @@
     .action-buttons button {
         margin-right: 5px;
     }
+    
+    .close-button {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        cursor: pointer;
+        font-size: 18px;
+        color: #6c757d;
+    }
+    
+    .close-button:hover {
+        color: #343a40;
+    }
 </style>
 {% endblock %}
 
@@ -143,6 +157,7 @@
         <!-- Payment Status Section (for active payments) -->
         <div class="col-md-12">
             <div id="payment-status-section" class="dashboard-card payment-status-card">
+                <span class="close-button" id="dismiss-status-btn">&times;</span>
                 <div class="d-flex align-items-center mb-2">
                     <div class="spinner"></div>
                     <div class="payment-status-title" id="payment-status-title">Processing Payment</div>
@@ -255,11 +270,47 @@
         document.getElementById('refresh-page-btn').addEventListener('click', function() {
             window.location.reload();
         });
+        
+        // Set up dismiss button
+        document.getElementById('dismiss-status-btn').addEventListener('click', function() {
+            // Hide status section
+            document.getElementById('payment-status-section').style.display = 'none';
+            
+            // Stop polling
+            stopPaymentStatusPolling();
+            
+            // Call endpoint to clear status session (optional)
+            clearPaymentStatus('{{ session.get("active_payment_id") }}');
+        });
+        {% endif %}
+        
+        // Check for timed out payments and auto-clear them
+        {% if session.get('payment_timestamp') %}
+        const paymentTimestamp = new Date('{{ session.get("payment_timestamp") }}');
+        const currentTime = new Date();
+        const timeDiff = (currentTime - paymentTimestamp) / 1000; // in seconds
+        
+        // If payment is more than 5 minutes old, auto-clear it
+        if (timeDiff > 300) {
+            clearPaymentStatus('{{ session.get("active_payment_id") }}');
+            // Don't show status section for old payments
+            const statusSection = document.getElementById('payment-status-section');
+            if (statusSection) {
+                statusSection.style.display = 'none';
+            }
+        }
         {% endif %}
     });
     
     function showPaymentStatus() {
         document.getElementById('payment-status-section').style.display = 'block';
+    }
+    
+    function clearPaymentStatus(checkoutId) {
+        // Call endpoint to clear payment status from session
+        fetch('/clear-payment-status/' + checkoutId)
+            .then(response => response.json())
+            .catch(error => console.error('Error clearing payment status:', error));
     }
 </script>
 {% endblock %}
