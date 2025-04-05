@@ -22,13 +22,14 @@ function startPaymentStatusPolling(checkoutId, statusUrl, interval = 1000) {
     // Reset polling count
     pollingCount = 0;
     
-    // Update status indicators on notification in dashboard
-    updateStatusNotification("Processing Payment", "Waiting for payment confirmation...");
+    // Update status message
+    updateStatusMessage("Waiting for M-Pesa confirmation...");
+    updateStatusTitle("Processing Payment");
     
-    // Show notification if it's not already visible
-    const notificationEl = document.getElementById('payment-notification');
-    if (notificationEl && notificationEl.style.display !== 'block') {
-        notificationEl.style.display = 'block';
+    // Make status section visible if it's not already
+    const statusSection = document.getElementById('payment-status-section');
+    if (statusSection && statusSection.style.display !== 'block') {
+        statusSection.style.display = 'block';
     }
     
     // Start polling
@@ -61,19 +62,6 @@ function checkPaymentStatus(checkoutId, statusUrl) {
     
     // Add visual feedback with dots
     const dots = ".".repeat(pollingCount % 4);
-    updateStatusNotification(null, `Waiting for payment confirmation${dots}`);
-    
-    // Check if we've reached maximum polling attempts
-    if (pollingCount >= MAX_POLLING_COUNT) {
-        stopPaymentStatusPolling();
-        updateStatusNotification("Payment Timeout", "Payment processing timed out. Please check your dashboard for the latest status.");
-        
-        // Automatically refresh page after 3 seconds
-        setTimeout(() => {
-            window.location.reload();
-        }, 3000);
-        return;
-    }
     
     // Make AJAX request
     fetch(`${statusUrl}/${checkoutId}`)
@@ -91,20 +79,9 @@ function checkPaymentStatus(checkoutId, statusUrl) {
                 case 'completed':
                     // Payment successful
                     stopPaymentStatusPolling();
-                    updateStatusNotification("Payment Successful!", "Your payment has been processed successfully. Refreshing page...");
-                    
-                    // Refresh page to show updated balance
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1500);
-                    break;
-                    
-                case 'failed':
-                case 'cancelled':
-                case 'error':
-                    // Payment failed
-                    stopPaymentStatusPolling();
-                    updateStatusNotification("Payment Failed", data.message || 'Payment could not be processed. Please try again.');
+                    updateStatusTitle("Payment Successful!");
+                    updateStatusMessage("Your payment has been processed successfully. The page will refresh in a moment to show your updated balance.");
+                    updateStatusSectionStyle('success');
                     
                     // Refresh page after a delay
                     setTimeout(() => {
@@ -112,60 +89,144 @@ function checkPaymentStatus(checkoutId, statusUrl) {
                     }, 3000);
                     break;
                     
+                case 'failed':
+                    // Payment failed
+                    stopPaymentStatusPolling();
+                    updateStatusTitle("Payment Failed");
+                    updateStatusMessage(data.message || 'Payment could not be processed. Please try again.');
+                    updateStatusSectionStyle('failed');
+                    break;
+                    
+                case 'cancelled':
+                    // Payment cancelled
+                    stopPaymentStatusPolling();
+                    updateStatusTitle("Payment Cancelled");
+                    updateStatusMessage("The payment has been cancelled.");
+                    updateStatusSectionStyle('cancelled');
+                    break;
+                    
+                case 'error':
+                    // Error in payment
+                    stopPaymentStatusPolling();
+                    updateStatusTitle("Payment Error");
+                    updateStatusMessage(data.message || 'An error occurred during payment processing. Please try again.');
+                    updateStatusSectionStyle('error');
+                    break;
+                    
                 case 'pending':
                     // Still pending user action
-                    updateStatusNotification("Payment Pending", `Please check your phone and approve the M-Pesa payment${dots}`);
+                    updateStatusTitle("Payment Pending");
+                    updateStatusMessage(`Please check your phone and approve the M-Pesa payment request${dots}`);
+                    updateStatusSectionStyle('pending');
                     break;
                     
                 case 'processing':
                     // Processing after user action
-                    updateStatusNotification("Processing Payment", `M-Pesa is processing your payment${dots}`);
+                    updateStatusTitle("Processing Payment");
+                    updateStatusMessage(`M-Pesa is processing your payment${dots}`);
+                    updateStatusSectionStyle('processing');
                     break;
                     
                 case 'queued':
                     // Still in queue
-                    updateStatusNotification("Payment Queued", `Your payment request is in queue${dots}`);
+                    updateStatusTitle("Payment Queued");
+                    updateStatusMessage(`Your payment request is waiting to be processed${dots}`);
+                    updateStatusSectionStyle('queued');
                     break;
                     
                 default:
                     // Unknown status
-                    updateStatusNotification("Unknown Status", `Current status: ${data.status}`);
+                    updateStatusTitle("Payment Status");
+                    updateStatusMessage(`Current status: ${data.status}`);
                     break;
             }
         })
         .catch(error => {
             console.error("Error checking payment status:", error);
-            updateStatusNotification(null, `Error checking payment status. Retrying...`);
+            
+            // Check if we've reached maximum polling attempts
+            if (pollingCount >= MAX_POLLING_COUNT) {
+                stopPaymentStatusPolling();
+                updateStatusTitle("Payment Status Unknown");
+                updateStatusMessage("The payment process is taking longer than expected. Please click 'Refresh Page' to check the latest status.");
+                updateStatusSectionStyle('timeout');
+            } else {
+                // Continue polling but don't show error to user to avoid confusion
+                updateStatusMessage(`Waiting for payment confirmation${dots}`);
+            }
         });
 }
 
 /**
- * Update the payment status notification in the dashboard
- * @param {string|null} title - The title to display (null to keep existing)
+ * Update the payment status message
  * @param {string} message - The message to display
  */
-function updateStatusNotification(title, message) {
-    const titleElement = document.getElementById('payment-status-title');
+function updateStatusMessage(message) {
     const messageElement = document.getElementById('payment-status-message');
-    
     if (messageElement) {
         messageElement.textContent = message;
     }
-    
-    if (title && titleElement) {
+}
+
+/**
+ * Update the payment status title
+ * @param {string} title - The title to display
+ */
+function updateStatusTitle(title) {
+    const titleElement = document.getElementById('payment-status-title');
+    if (titleElement) {
         titleElement.textContent = title;
     }
 }
 
 /**
- * Cancel the current payment
- * @param {string} checkoutId - The checkout ID to cancel
- * @param {string} cancelUrl - The URL to cancel payment at
+ * Update the status section styling based on status
+ * @param {string} status - The status to set
  */
-function cancelPayment(checkoutId, cancelUrl) {
-    if (confirm('Are you sure you want to cancel this payment?')) {
-        stopPaymentStatusPolling();
-        window.location.href = `${cancelUrl}/${checkoutId}`;
+function updateStatusSectionStyle(status) {
+    const statusSection = document.getElementById('payment-status-section');
+    if (!statusSection) return;
+    
+    // First remove all status classes
+    statusSection.classList.remove(
+        'border-primary', 'border-success', 'border-danger', 'border-warning', 'border-info'
+    );
+    
+    // Add appropriate border style
+    switch(status) {
+        case 'completed':
+        case 'success':
+            statusSection.style.borderLeftColor = '#28a745';
+            break;
+        case 'failed':
+        case 'error':
+            statusSection.style.borderLeftColor = '#dc3545';
+            break;
+        case 'pending':
+            statusSection.style.borderLeftColor = '#ffc107';
+            break;
+        case 'processing':
+        case 'queued':
+            statusSection.style.borderLeftColor = '#17a2b8';
+            break;
+        case 'cancelled':
+            statusSection.style.borderLeftColor = '#6c757d';
+            break;
+        case 'timeout':
+            statusSection.style.borderLeftColor = '#fd7e14';
+            break;
+        default:
+            statusSection.style.borderLeftColor = '#3498db';
+    }
+}
+
+/**
+ * Show the payment status section
+ */
+function showPaymentStatus() {
+    const statusSection = document.getElementById('payment-status-section');
+    if (statusSection) {
+        statusSection.style.display = 'block';
     }
 }
 
