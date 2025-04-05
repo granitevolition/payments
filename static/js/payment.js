@@ -21,9 +21,14 @@ function startPaymentStatusPolling(checkoutId, statusUrl, interval = 1000) {
     // Reset polling count
     pollingCount = 0;
     
-    // Update status indicators
-    updateStatusMessage("Waiting for payment confirmation...");
-    updateStatusIndicator("pending");
+    // Update status indicators on notification in dashboard
+    updateStatusNotification("Processing Payment", "Waiting for payment confirmation...");
+    
+    // Show notification if it's not already visible
+    const notificationEl = document.getElementById('payment-notification');
+    if (notificationEl && notificationEl.style.display !== 'block') {
+        notificationEl.style.display = 'block';
+    }
     
     // Start polling
     pollingInterval = setInterval(() => {
@@ -55,16 +60,17 @@ function checkPaymentStatus(checkoutId, statusUrl) {
     
     // Add visual feedback with dots
     const dots = ".".repeat(pollingCount % 4);
-    updateStatusMessage(`Waiting for payment confirmation${dots}`);
+    updateStatusNotification(null, `Waiting for payment confirmation${dots}`);
     
     // Check if we've reached maximum polling attempts
     if (pollingCount >= MAX_POLLING_COUNT) {
         stopPaymentStatusPolling();
-        updateStatusMessage("Payment processing timed out. Please check your dashboard for payment status.");
-        updateStatusIndicator("timeout");
+        updateStatusNotification("Payment Timeout", "Payment processing timed out. Please check your dashboard for the latest status.");
         
-        // Show timeout message and redirect button
-        showTimeoutMessage();
+        // Automatically refresh page after 3 seconds
+        setTimeout(() => {
+            window.location.reload();
+        }, 3000);
         return;
     }
     
@@ -84,12 +90,11 @@ function checkPaymentStatus(checkoutId, statusUrl) {
                 case 'completed':
                     // Payment successful
                     stopPaymentStatusPolling();
-                    updateStatusMessage("Payment successful! Redirecting to success page...");
-                    updateStatusIndicator("success");
+                    updateStatusNotification("Payment Successful!", "Your payment has been processed successfully. Refreshing page...");
                     
-                    // Redirect to success page
+                    // Refresh page to show updated balance
                     setTimeout(() => {
-                        window.location.href = `/payment-success/${checkoutId}`;
+                        window.location.reload();
                     }, 1500);
                     break;
                     
@@ -98,68 +103,56 @@ function checkPaymentStatus(checkoutId, statusUrl) {
                 case 'error':
                     // Payment failed
                     stopPaymentStatusPolling();
-                    updateStatusMessage(`Payment failed: ${data.message || 'Unknown error'}`);
-                    updateStatusIndicator("failed");
+                    updateStatusNotification("Payment Failed", data.message || 'Payment could not be processed. Please try again.');
                     
-                    // Redirect to failure page
+                    // Refresh page after a delay
                     setTimeout(() => {
-                        window.location.href = `/payment-failed/${checkoutId}`;
-                    }, 1500);
+                        window.location.reload();
+                    }, 3000);
                     break;
                     
                 case 'pending':
+                    // Still pending user action
+                    updateStatusNotification("Payment Pending", `Please check your phone and approve the M-Pesa payment${dots}`);
+                    break;
+                    
                 case 'processing':
-                    // Still processing, continue polling
-                    updateStatusMessage(`Waiting for payment confirmation${dots}`);
-                    updateStatusIndicator("pending");
+                    // Processing after user action
+                    updateStatusNotification("Processing Payment", `M-Pesa is processing your payment${dots}`);
+                    break;
+                    
+                case 'queued':
+                    // Still in queue
+                    updateStatusNotification("Payment Queued", `Your payment request is in queue${dots}`);
                     break;
                     
                 default:
                     // Unknown status
-                    updateStatusMessage(`Unknown status: ${data.status}`);
-                    updateStatusIndicator("unknown");
+                    updateStatusNotification("Unknown Status", `Current status: ${data.status}`);
                     break;
             }
         })
         .catch(error => {
             console.error("Error checking payment status:", error);
-            updateStatusMessage(`Error checking payment status. Retrying...`);
+            updateStatusNotification(null, `Error checking payment status. Retrying...`);
         });
 }
 
 /**
- * Update the payment status message
+ * Update the payment status notification in the dashboard
+ * @param {string|null} title - The title to display (null to keep existing)
  * @param {string} message - The message to display
  */
-function updateStatusMessage(message) {
-    const statusElement = document.getElementById('payment-status-message');
-    if (statusElement) {
-        statusElement.textContent = message;
+function updateStatusNotification(title, message) {
+    const titleElement = document.getElementById('payment-status-title');
+    const messageElement = document.getElementById('payment-status-message');
+    
+    if (messageElement) {
+        messageElement.textContent = message;
     }
-}
-
-/**
- * Update the payment status indicator
- * @param {string} status - The status to display
- */
-function updateStatusIndicator(status) {
-    const indicatorElement = document.getElementById('payment-status-indicator');
-    if (indicatorElement) {
-        // Remove all status classes
-        indicatorElement.classList.remove('status-pending', 'status-success', 'status-failed', 'status-timeout', 'status-unknown');
-        
-        // Add appropriate class
-        indicatorElement.classList.add(`status-${status}`);
-    }
-}
-
-/**
- * Show timeout message
- */
-function showTimeoutMessage() {
-    const timeoutElement = document.getElementById('payment-timeout-message');
-    if (timeoutElement) {
-        timeoutElement.style.display = 'block';
+    
+    if (title && titleElement) {
+        titleElement.textContent = title;
     }
 }
 
