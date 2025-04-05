@@ -1,139 +1,127 @@
-# Lipia Subscription Service
+# Lipia Subscription Payment System
 
-A web-based subscription management system for the Andikar AI service, enabling users to purchase and manage word subscriptions.
+This web application provides a subscription service with M-Pesa payment integration. Users can register, purchase word credits, and consume them as needed. The application is based on Flask and uses MongoDB as its database.
 
-## Overview
+## Key Features
 
-This application provides a complete subscription management solution for the Andikar AI text humanization service. It allows users to:
-
-- Create and manage user accounts
-- Purchase word subscriptions via M-PESA
-- Track word usage and payment history
-- Consume words from their account balance
-
-## Tech Stack
-
-- **Backend**: Flask (Python web framework)
-- **Database**: MongoDB
-- **Frontend**: HTML, CSS, JavaScript
-- **Payment Processing**: Integrated with Lipia API for M-PESA payments
-- **Deployment**: Ready for Heroku, Railway, or any platform supporting Python
-
-## Features
-
-### User Management
 - User registration and authentication
-- Secure password handling with bcrypt
-- Session management
+- Subscription plans with different word limits
+- M-Pesa payment integration
+- Real-time payment status updates
+- Word usage tracking
 
-### Subscription System
-- Multiple subscription tiers (Basic and Premium)
-- Payment processing via M-PESA
-- Real-time payment status tracking
-- Payment history
+## Technical Architecture
 
-### Word Usage
-- Track word balance
-- Consume words from balance
-- Word usage validation
+The application follows a web-based architecture with the following components:
 
-### API Integration
-- Integration with Lipia API for payment processing
-- Callback handling for payment confirmation
+### Backend
+- **Flask**: Web framework
+- **MongoDB**: Database for storing user data, payments, and transactions
+- **Flask-Login**: For user authentication
+- **Flask-Bcrypt**: For password hashing
+- **PyMongo**: For MongoDB integration
 
-## Project Structure
+### Frontend
+- **JavaScript**: For real-time payment status updates
+- **Bootstrap**: For responsive UI design
+- **HTML/CSS**: For page structure and styling
 
-- `app.py` - Main Flask application
-- `config.py` - Application configuration
-- `models.py` - MongoDB models for users, payments, and transactions
-- `utils.py` - Utility functions for payments and API integration
-- `forms.py` - Form validation classes
-- `templates/` - HTML templates
-- `static/` - CSS and JavaScript assets
+### Payment Processing
+- **Asynchronous Payment Processing**: Uses background threads to process payments
+- **Real-time Status Updates**: Client-side polling with JavaScript
+- **Transaction Management**: MongoDB transactions for payment operations
 
-## Setup Instructions
+## Payment Flow
 
-### Prerequisites
-- Python 3.8 or higher
-- MongoDB (local or cloud instance)
-- M-PESA integration (via Lipia API)
+The application implements a robust payment flow:
 
-### Installation
+1. **Initiation**: User selects a subscription plan
+2. **Queue Processing**: Payment request is added to a processing queue
+3. **API Request**: The system sends a request to the M-Pesa API
+4. **User Action**: User receives a prompt on their phone to authorize payment
+5. **Callback Handling**: M-Pesa system sends callback to our application
+6. **Status Updates**: Client-side JavaScript polls for payment status
+7. **Transaction Completion**: System updates user's word count upon successful payment
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/granitevolition/payments.git
-   cd payments
-   ```
+## Handling Timeouts and Failures
 
-2. Create a virtual environment:
-   ```
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\\Scripts\\activate
-   ```
+- **Worker Timeouts**: Uses asynchronous processing to avoid gunicorn worker timeouts
+- **Transaction Management**: MongoDB transactions ensure data consistency
+- **Error Recovery**: Proper error handling and status tracking
+- **Client-side Fallbacks**: UI provides options for users when timeouts occur
 
-3. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+## MongoDB Schema
 
-4. Configure environment variables:
-   ```
-   cp .env.example .env
-   ```
-   Edit `.env` file to set the appropriate values for your environment.
+### Users Collection
+- `username`: Unique identifier for the user
+- `password`: Bcrypt-hashed password
+- `phone_number`: User's phone number for M-Pesa payments
+- `words_remaining`: Number of words available to the user
+- `created_at`: User creation timestamp
+- `last_login`: Last login timestamp
 
-5. Start the application:
-   ```
-   flask run
-   ```
-   Or for production:
-   ```
-   gunicorn app:app
-   ```
+### Payments Collection
+- `username`: Reference to the user
+- `amount`: Payment amount
+- `reference`: Payment reference number
+- `checkout_id`: Unique payment identifier
+- `subscription_type`: Type of subscription (basic/premium)
+- `timestamp`: Payment timestamp
+- `status`: Payment status (pending/completed/failed/etc.)
 
-## MongoDB Configuration
-
-This application uses MongoDB as its database. The connection string is configured in the `.env` file:
-
-```
-MONGO_URI=mongodb+srv://edgarmaina003:<db_password>@oldtrafford.id96k.mongodb.net/?retryWrites=true&w=majority&appName=OldTrafford
-```
-
-Make sure to replace `<db_password>` with your actual password.
-
-## Database Collections
-
-The application uses the following MongoDB collections:
-
-1. **users** - User accounts and word balances
-2. **payments** - Payment records
-3. **transactions** - Transaction tracking for payments
-
-## API Integration
-
-The application integrates with the Lipia API for M-PESA payment processing. The API base URL and key are configured in the `.env` file:
-
-```
-API_BASE_URL=https://lipia-api.kreativelabske.com/api
-API_KEY=your_api_key_here
-```
+### Transactions Collection
+- `checkout_id`: Unique transaction identifier
+- `real_checkout_id`: M-Pesa generated checkout ID (if different)
+- `username`: Reference to the user
+- `amount`: Transaction amount
+- `subscription_type`: Type of subscription (basic/premium)
+- `timestamp`: Transaction initiation timestamp
+- `updated_at`: Last update timestamp
+- `status`: Transaction status (queued/processing/completed/failed/etc.)
+- `error`: Error message if applicable
+- `reference`: Payment reference number from M-Pesa
 
 ## Deployment
 
-The application includes a `Procfile` for easy deployment to platforms like Heroku or Railway.
+The application is configured for deployment on Railway.app with:
+
+- **Gunicorn**: Web server with increased timeouts (120s) for payment processing
+- **MongoDB Atlas**: Cloud database for production use
+- **Environment Variables**: Configuration via environment variables
 
 ## Security Considerations
 
-- User passwords are hashed using bcrypt
-- API keys are stored in environment variables
-- Session management is handled securely
-- Form validation prevents common attacks
+- **Password Hashing**: Using bcrypt for secure password storage
+- **Transaction Validation**: Verifying user ownership of transactions
+- **Error Logging**: Comprehensive error handling and logging
+- **MongoDB Connection**: Secure connection to MongoDB Atlas
 
-## Contributing
+## Best Practices Implemented
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+1. **Asynchronous Payment Processing**: Using a queue and background worker
+2. **Proper Error Handling**: Comprehensive try/except blocks
+3. **Real-time Updates**: Client-side polling for status updates
+4. **Timeout Management**: Proper handling of timeouts in web requests
+5. **Transaction Atomicity**: MongoDB transactions for data consistency
+6. **Graceful Degradation**: Fallback mechanisms when services are unavailable
+7. **Clean Separation of Concerns**: Payment processing logic in separate module
 
-## License
+## Development Setup
 
-[MIT](https://choosealicense.com/licenses/mit/)
+1. Clone the repository
+2. Create a virtual environment: `python -m venv venv`
+3. Activate the virtual environment:
+   - Windows: `venv\Scripts\activate`
+   - Unix/Mac: `source venv/bin/activate`
+4. Install dependencies: `pip install -r requirements.txt`
+5. Set up environment variables (see .env.example)
+6. Run the application: `flask run`
+
+## Environment Variables
+
+- `SECRET_KEY`: Flask secret key
+- `MONGO_URI`: MongoDB connection URI
+- `API_KEY`: M-Pesa API key
+- `API_BASE_URL`: M-Pesa API base URL
+- `CALLBACK_URL`: Public URL for payment callbacks
+- `FLASK_DEBUG`: Enable debug mode (True/False)
