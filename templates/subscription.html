@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Subscription - Lipia Subscription Service{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white">
+                <h4 class="card-title mb-0">Subscription Options</h4>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card mb-3 h-100">
+                            <div class="card-header bg-light">
+                                <h5 class="card-title mb-0">Basic Subscription</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <h3 class="text-primary">$20</h3>
+                                    <p class="text-muted">For 100 words</p>
+                                </div>
+                                <ul class="list-group list-group-flush mb-4">
+                                    <li class="list-group-item">100 words to use</li>
+                                    <li class="list-group-item">Basic support</li>
+                                    <li class="list-group-item">Valid for 30 days</li>
+                                </ul>
+                                <div class="d-grid">
+                                    <a href="{{ url_for('process_payment', amount=20, subscription_type='basic') }}" class="btn btn-primary">Pay for Basic</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card mb-3 h-100 border-primary">
+                            <div class="card-header bg-primary text-white">
+                                <h5 class="card-title mb-0">Premium Subscription</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <h3 class="text-primary">$50</h3>
+                                    <p class="text-muted">For 1000 words</p>
+                                </div>
+                                <ul class="list-group list-group-flush mb-4">
+                                    <li class="list-group-item">1000 words to use</li>
+                                    <li class="list-group-item">Priority support</li>
+                                    <li class="list-group-item">Valid for 60 days</li>
+                                    <li class="list-group-item">Best value option</li>
+                                </ul>
+                                <div class="d-grid">
+                                    <a href="{{ url_for('process_payment', amount=50, subscription_type='premium') }}" class="btn btn-primary">Pay for Premium</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card shadow">
+            <div class="card-header bg-primary text-white">
+                <h4 class="card-title mb-0">Payment Information</h4>
+            </div>
+            <div class="card-body">
+                <p>When you click on one of the payment buttons above, we'll send an M-PESA payment request to your registered phone number.</p>
+                <p>To complete the payment:</p>
+                <ol>
+                    <li>Check your phone for an M-PESA payment request notification.</li>
+                    <li>Enter your M-PESA PIN to authorize the payment.</li>
+                    <li>Wait for the payment to be processed.</li>
+                    <li>You'll be notified when the payment is complete and words are added to your account.</li>
+                </ol>
+                <div class="alert alert-info">
+                    <p class="mb-0"><strong>Note:</strong> Your current phone number is: <strong>{{ current_user.phone_number }}</strong></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
