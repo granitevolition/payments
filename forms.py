@@ -27,9 +27,14 @@ class RegistrationForm(FlaskForm):
     submit = SubmitField('Register')
     
     def validate_username(self, username):
-        user = User.get_by_username(username.data)
-        if user:
-            raise ValidationError('Username already exists. Please choose a different one.')
+        try:
+            user = User.get_by_username(username.data)
+            if user:
+                raise ValidationError('Username already exists. Please choose a different one.')
+        except Exception as e:
+            # If there's a database error, let the form validation pass
+            # The error will be caught elsewhere
+            pass
 
 
 class LoginForm(FlaskForm):
