@@ -3,6 +3,7 @@ from flask_pymongo import PyMongo
 from flask_bcrypt import Bcrypt
 from bson import ObjectId
 
+# Initialize Flask extensions
 mongo = PyMongo()
 bcrypt = Bcrypt()
 
@@ -28,17 +29,25 @@ class User:
     @staticmethod
     def get_by_username(username):
         """Get a user by username"""
-        return mongo.db.users.find_one({'username': username})
+        try:
+            return mongo.db.users.find_one({'username': username})
+        except Exception as e:
+            print(f"Error in get_by_username: {e}")
+            return None
     
     @staticmethod
     def get_by_id(user_id):
         """Get a user by ID"""
-        return mongo.db.users.find_one({'_id': ObjectId(user_id)})
+        try:
+            return mongo.db.users.find_one({'_id': ObjectId(user_id)})
+        except Exception as e:
+            print(f"Error in get_by_id: {e}")
+            return None
     
     @staticmethod
     def update_word_count(username, words_to_add):
         """Update word count for a user"""
-        user = mongo.db.users.find_one({'username': username})
+        user = User.get_by_username(username)
         if not user:
             return None
         
@@ -55,7 +64,7 @@ class User:
     @staticmethod
     def consume_words(username, words_to_use):
         """Consume words from a user's account"""
-        user = mongo.db.users.find_one({'username': username})
+        user = User.get_by_username(username)
         if not user:
             return False, 0
         
@@ -130,7 +139,11 @@ class Payment:
     @staticmethod
     def get_user_payments(username):
         """Get all payments for a user"""
-        return list(mongo.db.payments.find({'username': username}).sort('timestamp', -1))
+        try:
+            return list(mongo.db.payments.find({'username': username}).sort('timestamp', -1))
+        except Exception as e:
+            print(f"Error in get_user_payments: {e}")
+            return []
 
 
 class Transaction:
@@ -152,7 +165,11 @@ class Transaction:
     @staticmethod
     def get(checkout_id):
         """Get a transaction by checkout ID"""
-        return mongo.db.transactions.find_one({'checkout_id': checkout_id})
+        try:
+            return mongo.db.transactions.find_one({'checkout_id': checkout_id})
+        except Exception as e:
+            print(f"Error in Transaction.get: {e}")
+            return None
     
     @staticmethod
     def update_status(checkout_id, status, reference=None):
