@@ -6,7 +6,9 @@
 // Payment status polling
 let pollingInterval;
 let pollingCount = 0;
+let errorCount = 0;
 const MAX_POLLING_COUNT = 120; // Stop polling after 120 attempts (2 minutes at 1 second intervals)
+const MAX_ERROR_COUNT = 5; // Maximum consecutive errors before showing error to user
 const CURRENCY = 'KSH'; // Set currency to KSH
 
 /**
@@ -19,8 +21,9 @@ function startPaymentStatusPolling(checkoutId, statusUrl, interval = 1000) {
     // Clear any existing polling
     stopPaymentStatusPolling();
     
-    // Reset polling count
+    // Reset polling count and error count
     pollingCount = 0;
+    errorCount = 0;
     
     // Update status message
     updateStatusMessage("Waiting for M-Pesa confirmation...");
@@ -69,6 +72,8 @@ function checkPaymentStatus(checkoutId, statusUrl) {
             if (!response.ok) {
                 throw new Error(`HTTP error! Status: ${response.status}`);
             }
+            // Reset error count on successful response
+            errorCount = 0;
             return response.json();
         })
         .then(data => {
@@ -137,12 +142,15 @@ function checkPaymentStatus(checkoutId, statusUrl) {
                 default:
                     // Unknown status
                     updateStatusTitle("Payment Status");
-                    updateStatusMessage(`Current status: ${data.status}`);
+                    updateStatusMessage(`Current status: ${data.status}${dots}`);
                     break;
             }
         })
         .catch(error => {
             console.error("Error checking payment status:", error);
+            
+            // Increment error count
+            errorCount++;
             
             // Check if we've reached maximum polling attempts
             if (pollingCount >= MAX_POLLING_COUNT) {
@@ -150,8 +158,16 @@ function checkPaymentStatus(checkoutId, statusUrl) {
                 updateStatusTitle("Payment Status Unknown");
                 updateStatusMessage("The payment process is taking longer than expected. Please click 'Refresh Page' to check the latest status.");
                 updateStatusSectionStyle('timeout');
-            } else {
+            } 
+            // Only show error message if we have persistent errors (avoid brief network issues)
+            else if (errorCount >= MAX_ERROR_COUNT) {
+                updateStatusTitle("Connection Issue");
+                updateStatusMessage("Having trouble connecting to the payment service. We'll keep trying. You can also click 'Refresh Page' to check the latest status.");
+                updateStatusSectionStyle('error');
+            }
+            else {
                 // Continue polling but don't show error to user to avoid confusion
+                // Just add dots to show it's still working
                 updateStatusMessage(`Waiting for payment confirmation${dots}`);
             }
         });
@@ -186,11 +202,6 @@ function updateStatusTitle(title) {
 function updateStatusSectionStyle(status) {
     const statusSection = document.getElementById('payment-status-section');
     if (!statusSection) return;
-    
-    // First remove all status classes
-    statusSection.classList.remove(
-        'border-primary', 'border-success', 'border-danger', 'border-warning', 'border-info'
-    );
     
     // Add appropriate border style
     switch(status) {
